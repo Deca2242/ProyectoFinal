@@ -69,12 +69,6 @@ public class TicketServiceImpl implements TicketService {
 
         validateSegment(trip, fromStop, toStop);
 
-        Integer capacity = trip.getBus().getCapacity();
-        if (request.seatNumber() < 1 || request.seatNumber() > capacity) {
-            throw new SeatNotAvailableException(
-                    "El asiento " + request.seatNumber() + " no existe en este bus (capacidad: " + capacity + ")");
-        }
-
         // Verificar si hay una reserva temporal activa en este asiento
         Optional<SeatHold> activeHold = seatHoldRepository.findActiveHold(
                 request.tripId(),
@@ -103,6 +97,9 @@ public class TicketServiceImpl implements TicketService {
 
         // Validar que no se exceda el límite de overbooking configurado
         validateOverbooking(trip);
+
+        // El número de asiento debe existir (o caer dentro del margen de sobreventa permitido)
+        validateSeatNumber(trip, request.seatNumber());
 
         // Calcular precio final aplicando tarifas dinámicas y descuentos por tipo de pasajero
         BigDecimal finalPrice = calculateFinalPrice(trip, fromStop, toStop, request, request.passengerType());
@@ -342,6 +339,18 @@ public class TicketServiceImpl implements TicketService {
             throw new OverbookingNotAllowedException(
                     String.format("El viaje ha alcanzado el límite de overbooking permitido (%.1f%%). Ocupación actual: %.1f%%",
                             maxOverbookingRate * 100, occupancyRate * 100));
+        }
+    }
+
+    // Valida que el asiento esté entre 1 y la capacidad del bus más el margen de overbooking configurado
+    // (con 40 asientos y 5% de overbooking se admiten los números 41 y 42)
+    private void validateSeatNumber(Trip trip, Integer seatNumber) {
+        int capacity = trip.getBus().getCapacity();
+        // El epsilon evita errores de redondeo de double (p. ej. 100 * 0.29 = 28.999999999999996)
+        int maxSeatNumber = capacity + (int) Math.floor(capacity * configService.getOverbookingMaxPercentage() + 1e-9);
+        if (seatNumber < 1 || seatNumber > maxSeatNumber) {
+            throw new SeatNotAvailableException(
+                    "El asiento " + seatNumber + " no existe en este bus (capacidad: " + capacity + ")");
         }
     }
 

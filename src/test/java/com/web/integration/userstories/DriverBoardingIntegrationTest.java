@@ -170,10 +170,7 @@ class DriverBoardingIntegrationTest extends BaseIntegrationTest {
                 "password123",
                 User.Role.DRIVER
         );
-        mvc.perform(post("/api/v1/auth/register")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(om.writeValueAsString(driverRegister)))
-                .andExpect(status().isCreated());
+        createUser(driverRegister);
 
         LoginRequest driverLogin = new LoginRequest("driver@test.com", "password123");
         MvcResult driverLoginResult = mvc.perform(post("/api/v1/auth/login")
@@ -194,10 +191,7 @@ class DriverBoardingIntegrationTest extends BaseIntegrationTest {
                 "password123",
                 User.Role.DISPATCHER
         );
-        mvc.perform(post("/api/v1/auth/register")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(om.writeValueAsString(dispatcherRegister)))
-                .andExpect(status().isCreated());
+        createUser(dispatcherRegister);
 
         LoginRequest dispatcherLogin = new LoginRequest("dispatcher@test.com", "password123");
         MvcResult dispatcherLoginResult = mvc.perform(post("/api/v1/auth/login")

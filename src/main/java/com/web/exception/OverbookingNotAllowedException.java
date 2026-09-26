@@ -5,12 +5,12 @@ import org.springframework.http.HttpStatus;
 // Excepción lanzada cuando se intenta vender más tickets que el límite de overbooking permite
 public class OverbookingNotAllowedException extends BusinessException {
     public OverbookingNotAllowedException(String message) {
-        super(message, HttpStatus.FORBIDDEN, "OVERBOOKING_NOT_ALLOWED");
+        super(message, HttpStatus.BAD_REQUEST, "OVERBOOKING_NOT_ALLOWED");
     }
 
     public OverbookingNotAllowedException() {
         super("El viaje ha alcanzado el límite de overbooking permitido",
-              HttpStatus.FORBIDDEN, "OVERBOOKING_NOT_ALLOWED");
+              HttpStatus.BAD_REQUEST, "OVERBOOKING_NOT_ALLOWED");
     }
 }
 

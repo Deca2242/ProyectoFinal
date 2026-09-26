@@ -168,10 +168,7 @@ class DispatcherOverbookingIntegrationTest extends BaseIntegrationTest {
                 "password123",
                 User.Role.ADMIN
         );
-        mvc.perform(post("/api/v1/auth/register")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(om.writeValueAsString(adminRegister)))
-                .andExpect(status().isCreated());
+        createUser(adminRegister);
 
         LoginRequest adminLogin = new LoginRequest("admin@test.com", "password123");
         MvcResult adminLoginResult = mvc.perform(post("/api/v1/auth/login")

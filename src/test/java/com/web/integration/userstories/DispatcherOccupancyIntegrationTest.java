@@ -166,10 +166,7 @@ class DispatcherOccupancyIntegrationTest extends BaseIntegrationTest {
                 "password123",
                 User.Role.DISPATCHER
         );
-        mvc.perform(post("/api/v1/auth/register")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(om.writeValueAsString(dispatcherRegister)))
-                .andExpect(status().isCreated());
+        createUser(dispatcherRegister);
 
         LoginRequest dispatcherLogin = new LoginRequest("dispatcher@test.com", "password123");
         MvcResult dispatcherLoginResult = mvc.perform(post("/api/v1/auth/login")

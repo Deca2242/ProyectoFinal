@@ -228,7 +228,7 @@ class PassengerTripFlowTest {
         mvc.perform(post("/api/v1/trips/1/tickets")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(om.writeValueAsString(request)))
-                .andExpect(status().isForbidden())
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("overbooking")));
     }
 }

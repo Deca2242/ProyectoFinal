@@ -165,10 +165,7 @@ class ClerkBaggageIntegrationTest extends BaseIntegrationTest {
                                 "1111111111",
                                 "password123",
                                 User.Role.CLERK);
-                mvc.perform(post("/api/v1/auth/register")
-                                .contentType(MediaType.APPLICATION_JSON)
-                                .content(om.writeValueAsString(clerkRegister)))
-                                .andExpect(status().isCreated());
+                createUser(clerkRegister);
 
                 LoginRequest clerkLogin = new LoginRequest("clerk@test.com", "password123");
                 MvcResult clerkLoginResult = mvc.perform(post("/api/v1/auth/login")
