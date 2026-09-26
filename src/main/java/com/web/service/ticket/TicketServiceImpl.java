@@ -26,7 +26,6 @@ import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.Optional;
 
 
 @Service
@@ -69,14 +68,18 @@ public class TicketServiceImpl implements TicketService {
 
         validateSegment(trip, fromStop, toStop);
 
-        // Verificar si hay una reserva temporal activa en este asiento
-        Optional<SeatHold> activeHold = seatHoldRepository.findActiveHold(
+        // Verificar holds activos de este asiento que se solapen con el tramo
+        List<SeatHold> overlappingHolds = seatHoldRepository.findOverlappingActiveHolds(
                 request.tripId(),
                 request.seatNumber(),
+                fromStop.getOrder(),
+                toStop.getOrder(),
                 now
         );
 
-        if (activeHold.isPresent() && !activeHold.get().getUser().getId().equals(passenger.getId())) {
+        boolean heldByOtherUser = overlappingHolds.stream()
+                .anyMatch(h -> !h.getUser().getId().equals(passenger.getId()));
+        if (heldByOtherUser) {
             throw new SeatNotAvailableException(
                     "El asiento " + request.seatNumber() + " tiene un hold activo de otro usuario");
         }
@@ -141,10 +144,9 @@ public class TicketServiceImpl implements TicketService {
 
         }
 
-        // Liberar la reserva temporal si el usuario tenía un hold activo
-        if (activeHold.isPresent() && activeHold.get().getUser().getId().equals(passenger.getId())) {
-            seatHoldService.releaseHold(activeHold.get().getId());
-
+        // Marcar como vendidos los holds del pasajero sobre este asiento y tramo
+        for (SeatHold hold : overlappingHolds) {
+            seatHoldService.releaseHold(hold.getId());
         }
 
         return ticketMapper.toResponse(ticket);
@@ -159,6 +161,11 @@ public class TicketServiceImpl implements TicketService {
 
         if (ticket.getStatus() != Ticket.TicketStatus.SOLD) {
             throw new InvalidSegmentException("El ticket ya está cancelado o es no-show");
+        }
+
+        if (ticket.getBoardedAt() != null) {
+            throw new BusinessException("No se puede cancelar un ticket de un pasajero que ya abordó",
+                    HttpStatus.BAD_REQUEST, "TICKET_ALREADY_BOARDED");
         }
 
         LocalDateTime now = LocalDateTime.now();
@@ -221,37 +228,51 @@ public class TicketServiceImpl implements TicketService {
         return ticketMapper.toResponse(ticket);
     }
 
-    // Marca tickets como NO_SHOW automáticamente cada 5 minutos si el viaje ya partió
-    @Scheduled(cron = "0 */5 * * * *") // Cada 5 minutos
+    // Registra el abordaje de un pasajero al validar su QR
+    @Override
+    @Transactional
+    public TicketResponse boardTicket(String qrCode) {
+        Ticket ticket = ticketRepository.findByQrCode(qrCode)
+                .orElseThrow(() -> new ResourceNotFoundException("Ticket", qrCode));
+
+        if (ticket.getStatus() != Ticket.TicketStatus.SOLD) {
+            throw new BusinessException("El ticket no es válido para abordar (estado: " + ticket.getStatus() + ")",
+                    HttpStatus.BAD_REQUEST, "TICKET_NOT_VALID");
+        }
+
+        if (ticket.getBoardedAt() != null) {
+            throw new BusinessException("El pasajero ya abordó con este ticket",
+                    HttpStatus.CONFLICT, "TICKET_ALREADY_BOARDED");
+        }
+
+        // BOARDING en la parada de origen; DEPARTED para quienes suben en paradas intermedias
+        Trip.TripStatus tripStatus = ticket.getTrip().getStatus();
+        if (tripStatus != Trip.TripStatus.BOARDING && tripStatus != Trip.TripStatus.DEPARTED) {
+            throw new BusinessException("El abordaje no está abierto para este viaje (estado: " + tripStatus + ")",
+                    HttpStatus.BAD_REQUEST, "BOARDING_NOT_OPEN");
+        }
+
+        ticket.setBoardedAt(LocalDateTime.now());
+        ticket = ticketRepository.save(ticket);
+
+        return ticketMapper.toResponse(ticket);
+    }
+
+    // Marca como NO_SHOW, cada 5 minutos, los tickets de pasajeros que no han abordado
+    // cuando faltan 5 minutos o menos para la salida (solo quienes suben en la parada de origen)
+    @Scheduled(cron = "0 */5 * * * *")
     @Transactional
     public void processNoShows() {
         LocalDateTime now = LocalDateTime.now();
-        LocalDateTime fiveMinutesFromNow = now.plusMinutes(5);
-        
-        List<Ticket> allTickets = ticketRepository.findAll();
-        int noShowCount = 0;
-        BigDecimal totalFees = BigDecimal.ZERO;
-        
-        for (Ticket ticket : allTickets) {
-            if (ticket.getStatus() == Ticket.TicketStatus.SOLD &&
-                ticket.getTrip().getDepartureTime().isBefore(fiveMinutesFromNow) &&
-                ticket.getTrip().getDepartureTime().isAfter(now)) {
-                
-                // Marcar como NO_SHOW
-                ticket.setStatus(Ticket.TicketStatus.NO_SHOW);
-                ticketRepository.save(ticket);
-                noShowCount++;
-                
-                // El asiento queda disponible automáticamente porque el ticket ya no está SOLD
-                // (la validación isSeatAvailableForSegment solo cuenta tickets SOLD)
-                
-                // Cobrar fee configurable (se registra pero no se procesa automáticamente)
-                BigDecimal noShowFee = configService.getNoShowFee();
-                totalFees = totalFees.add(noShowFee);
-            }
+
+        List<Ticket> noShows = ticketRepository.findUnboardedTicketsDepartingBetween(now, now.plusMinutes(5));
+
+        // El asiento queda disponible porque la disponibilidad solo cuenta tickets SOLD.
+        // El fee de no-show se cobra en el cierre de caja o facturación.
+        for (Ticket ticket : noShows) {
+            ticket.setStatus(Ticket.TicketStatus.NO_SHOW);
+            ticketRepository.save(ticket);
         }
-        
-        // Log para auditoría (el fee se cobrará en el proceso de cierre de caja o facturación)
     }
 
     // Valida que las paradas pertenezcan a la ruta y que el orden sea correcto

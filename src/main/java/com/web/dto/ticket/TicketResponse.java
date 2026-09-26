@@ -30,6 +30,7 @@ public record TicketResponse(
     Ticket.TicketStatus status,
     String qrCode,
     LocalDateTime purchasedAt,
-    BaggageResponse baggage  // Puede ser null
+    BaggageResponse baggage,  // Puede ser null
+    LocalDateTime boardedAt   // null si aún no aborda
 ) implements Serializable {}
 

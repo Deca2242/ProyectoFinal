@@ -91,20 +91,20 @@ public interface TicketRepository extends JpaRepository<Ticket, Long> {
             @Param("tripId") Long tripId,
             @Param("stopOrder") Integer stopOrder);
 
-    // Obtener tickets de un viaje para un tramo específico (para lista de
-    // pasajeros)
+    // Pasajeros que van a bordo en algún punto del tramo indicado (lista de pasajeros):
+    // incluye a quienes suben antes o bajan después, no solo a quienes hacen exactamente ese tramo
     @Query("""
                 SELECT t FROM Ticket t
                 WHERE t.trip.id = :tripId
                 AND t.status = 'SOLD'
-                AND t.fromStop.id = :fromStopId
-                AND t.toStop.id = :toStopId
+                AND t.fromStop.order < :toStopOrder
+                AND t.toStop.order > :fromStopOrder
                 ORDER BY t.seatNumber
             """)
     List<Ticket> findTicketsBySegment(
             @Param("tripId") Long tripId,
-            @Param("fromStopId") Long fromStopId,
-            @Param("toStopId") Long toStopId);
+            @Param("fromStopOrder") Integer fromStopOrder,
+            @Param("toStopOrder") Integer toStopOrder);
 
     // Buscar tickets elegibles para cancelación (para política de reembolso)
     @Query("""
@@ -224,6 +224,27 @@ public interface TicketRepository extends JpaRepository<Ticket, Long> {
     List<Ticket> findNoShowEligibleTickets(
             @Param("tripId") Long tripId,
             @Param("cutoffTime") LocalDateTime cutoffTime);
+
+    // Tickets sin abordar que suben en la primera parada de viajes que salen en la ventana (now, cutoff]
+    // Los pasajeros de paradas intermedias no se marcan porque no hay hora estimada por parada
+    @Query("""
+                SELECT t FROM Ticket t
+                JOIN t.trip tr
+                WHERE t.status = 'SOLD'
+                AND t.boardedAt IS NULL
+                AND tr.status IN ('SCHEDULED', 'BOARDING')
+                AND tr.departureTime > :now
+                AND tr.departureTime <= :cutoffTime
+                AND t.fromStop.order = (
+                    SELECT MIN(s.order) FROM Stop s WHERE s.route.id = tr.route.id
+                )
+            """)
+    List<Ticket> findUnboardedTicketsDepartingBetween(
+            @Param("now") LocalDateTime now,
+            @Param("cutoffTime") LocalDateTime cutoffTime);
+
+    // Tickets vendidos de un viaje (para cancelarlos junto con el viaje)
+    List<Ticket> findByTripIdAndStatus(Long tripId, Ticket.TicketStatus status);
 
     // Verificar si existe un ticket vendido para un viaje y asiento específico
     boolean existsByTripIdAndSeatNumberAndStatus(Long tripId, Integer seatNumber, Ticket.TicketStatus status);

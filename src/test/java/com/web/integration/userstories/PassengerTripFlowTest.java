@@ -142,7 +142,7 @@ class PassengerTripFlowTest {
         var expiresAt = LocalDateTime.now().plusMinutes(10);
         var response = new SeatHoldResponse(
                 1L, 1L, 10, 1L, expiresAt, SeatHold.HoldStatus.HOLD, LocalDateTime.now()
-        );
+        , null, null);
 
         when(seatHoldService.createHold(eq(1L), eq(10), any(SeatHoldRequest.class)))
                 .thenReturn(response);
@@ -174,7 +174,7 @@ class PassengerTripFlowTest {
                 10, 1L, "Bogotá", 1, 2L, "Medellín", 2,
                 BigDecimal.valueOf(50000), Ticket.PaymentMethod.CARD,
                 Ticket.TicketStatus.SOLD, "TKT-2025-001-ABC123", LocalDateTime.now(), null
-        );
+        , null);
 
         when(ticketService.purchaseTicket(any(TicketCreateRequest.class))).thenReturn(response);
 

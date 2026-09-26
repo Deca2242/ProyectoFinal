@@ -41,6 +41,7 @@ public interface TicketMapper {
     @Mapping(target = "qrCode", ignore = true) // Se genera en servicio
     @Mapping(target = "purchasedAt", ignore = true)
     @Mapping(target = "baggage", ignore = true) // Se maneja separadamente
+    @Mapping(target = "boardedAt", ignore = true)
     Ticket toEntity(TicketCreateRequest request);
 }
 

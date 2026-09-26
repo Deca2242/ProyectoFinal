@@ -82,7 +82,7 @@ class ClerkBaggageTest {
                 BigDecimal.valueOf(50000), Ticket.PaymentMethod.CARD,
                 Ticket.TicketStatus.SOLD, "TKT-2025-001-ABC123", LocalDateTime.now(),
                 baggageResponse
-        );
+        , null);
 
         when(ticketService.purchaseTicket(any(TicketCreateRequest.class))).thenReturn(ticketResponse);
 
@@ -120,7 +120,7 @@ class ClerkBaggageTest {
                 BigDecimal.valueOf(50000), Ticket.PaymentMethod.CARD,
                 Ticket.TicketStatus.SOLD, "TKT-2025-001-ABC123", LocalDateTime.now(),
                 baggageResponse
-        );
+        , null);
 
         when(ticketService.purchaseTicket(any(TicketCreateRequest.class))).thenReturn(ticketResponse);
 
@@ -155,7 +155,7 @@ class ClerkBaggageTest {
                 BigDecimal.valueOf(50000), Ticket.PaymentMethod.CARD,
                 Ticket.TicketStatus.SOLD, "TKT-2025-001-ABC123", LocalDateTime.now(),
                 baggageResponse1
-        );
+        , null);
 
         when(ticketService.purchaseTicket(any(TicketCreateRequest.class))).thenReturn(ticketResponse1);
 

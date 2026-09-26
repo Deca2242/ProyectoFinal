@@ -136,7 +136,7 @@ class TicketServiceImplTest {
                 10, 1L, "Bogotá", 1, 2L, "Medellín", 2,
                 BigDecimal.valueOf(50000), Ticket.PaymentMethod.CASH,
                 Ticket.TicketStatus.SOLD, "QR123", LocalDateTime.now(), null
-        );
+        , null);
     }
 
     @Test
@@ -152,8 +152,8 @@ class TicketServiceImplTest {
         when(userRepository.findById(1L)).thenReturn(Optional.of(passenger));
         when(stopRepository.findById(1L)).thenReturn(Optional.of(fromStop));
         when(stopRepository.findById(2L)).thenReturn(Optional.of(toStop));
-        when(seatHoldRepository.findActiveHold(eq(1L), eq(10), any(LocalDateTime.class)))
-                .thenReturn(Optional.empty());
+        when(seatHoldRepository.findOverlappingActiveHolds(eq(1L), eq(10), anyInt(), anyInt(), any(LocalDateTime.class)))
+                .thenReturn(List.of());
         when(ticketRepository.isSeatAvailableForSegment(1L, 10, 1, 2)).thenReturn(true);
         when(fareRuleRepository.findByRouteIdAndFromStopIdAndToStopId(1L, 1L, 2L))
                 .thenReturn(Optional.empty());
@@ -198,8 +198,8 @@ class TicketServiceImplTest {
         when(userRepository.findById(1L)).thenReturn(Optional.of(passenger));
         when(stopRepository.findById(1L)).thenReturn(Optional.of(fromStop));
         when(stopRepository.findById(2L)).thenReturn(Optional.of(toStop));
-        when(seatHoldRepository.findActiveHold(eq(1L), eq(10), any(LocalDateTime.class)))
-                .thenReturn(Optional.empty());
+        when(seatHoldRepository.findOverlappingActiveHolds(eq(1L), eq(10), anyInt(), anyInt(), any(LocalDateTime.class)))
+                .thenReturn(List.of());
         when(ticketRepository.isSeatAvailableForSegment(1L, 10, 1, 2)).thenReturn(true);
         when(fareRuleRepository.findByRouteIdAndFromStopIdAndToStopId(1L, 1L, 2L))
                 .thenReturn(Optional.empty());
@@ -245,8 +245,8 @@ class TicketServiceImplTest {
         when(userRepository.findById(1L)).thenReturn(Optional.of(passenger));
         when(stopRepository.findById(1L)).thenReturn(Optional.of(fromStop));
         when(stopRepository.findById(2L)).thenReturn(Optional.of(toStop));
-        when(seatHoldRepository.findActiveHold(eq(1L), eq(10), any(LocalDateTime.class)))
-                .thenReturn(Optional.empty());
+        when(seatHoldRepository.findOverlappingActiveHolds(eq(1L), eq(10), anyInt(), anyInt(), any(LocalDateTime.class)))
+                .thenReturn(List.of());
         when(ticketRepository.isSeatAvailableForSegment(1L, 10, 1, 2)).thenReturn(true);
         when(fareRuleRepository.findByRouteIdAndFromStopIdAndToStopId(1L, 1L, 2L))
                 .thenReturn(Optional.empty());
@@ -292,8 +292,8 @@ class TicketServiceImplTest {
         when(userRepository.findById(1L)).thenReturn(Optional.of(passenger));
         when(stopRepository.findById(1L)).thenReturn(Optional.of(fromStop));
         when(stopRepository.findById(2L)).thenReturn(Optional.of(toStop));
-        when(seatHoldRepository.findActiveHold(eq(1L), eq(10), any(LocalDateTime.class)))
-                .thenReturn(Optional.empty());
+        when(seatHoldRepository.findOverlappingActiveHolds(eq(1L), eq(10), anyInt(), anyInt(), any(LocalDateTime.class)))
+                .thenReturn(List.of());
         when(ticketRepository.isSeatAvailableForSegment(1L, 10, 1, 2)).thenReturn(true);
         when(fareRuleRepository.findByRouteIdAndFromStopIdAndToStopId(1L, 1L, 2L))
                 .thenReturn(Optional.empty());
@@ -336,8 +336,8 @@ class TicketServiceImplTest {
         when(userRepository.findById(1L)).thenReturn(Optional.of(passenger));
         when(stopRepository.findById(1L)).thenReturn(Optional.of(fromStop));
         when(stopRepository.findById(2L)).thenReturn(Optional.of(toStop));
-        when(seatHoldRepository.findActiveHold(eq(1L), eq(10), any(LocalDateTime.class)))
-                .thenReturn(Optional.empty());
+        when(seatHoldRepository.findOverlappingActiveHolds(eq(1L), eq(10), anyInt(), anyInt(), any(LocalDateTime.class)))
+                .thenReturn(List.of());
         when(ticketRepository.isSeatAvailableForSegment(1L, 10, 1, 2)).thenReturn(true);
         when(ticketRepository.countSoldSeats(1L)).thenReturn(42L); // 42/40 = 105% occupancy
         when(configService.getOverbookingMaxPercentage()).thenReturn(0.05); // Max 5% overbooking
@@ -360,8 +360,8 @@ class TicketServiceImplTest {
         when(userRepository.findById(1L)).thenReturn(Optional.of(passenger));
         when(stopRepository.findById(1L)).thenReturn(Optional.of(fromStop));
         when(stopRepository.findById(2L)).thenReturn(Optional.of(toStop));
-        when(seatHoldRepository.findActiveHold(eq(1L), eq(10), any(LocalDateTime.class)))
-                .thenReturn(Optional.empty());
+        when(seatHoldRepository.findOverlappingActiveHolds(eq(1L), eq(10), anyInt(), anyInt(), any(LocalDateTime.class)))
+                .thenReturn(List.of());
         when(ticketRepository.isSeatAvailableForSegment(1L, 10, 1, 2)).thenReturn(false);
 
         // When/Then

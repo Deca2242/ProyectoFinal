@@ -13,6 +13,7 @@ import com.web.exception.BusinessException;
 import com.web.exception.ResourceNotFoundException;
 import com.web.repository.BusRepository;
 import com.web.repository.RouteRepository;
+import com.web.repository.SeatHoldRepository;
 import com.web.repository.StopRepository;
 import com.web.repository.TicketRepository;
 import com.web.repository.TripRepository;
@@ -49,6 +50,9 @@ class TripServiceImplTest {
     private TicketRepository ticketRepository;
     @Mock
     private TripMapper tripMapper;
+
+    @Mock
+    private SeatHoldRepository seatHoldRepository;
 
     @InjectMocks
     private TripServiceImpl tripService;

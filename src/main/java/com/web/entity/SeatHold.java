@@ -29,6 +29,15 @@ public class SeatHold {
     @JoinColumn(name = "user_id", nullable = false)
     private User user;
 
+    // Tramo reservado; si es null el hold bloquea el asiento en todo el viaje
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "from_stop_id")
+    private Stop fromStop;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "to_stop_id")
+    private Stop toStop;
+
     @Column(name = "expires_at", nullable = false)
     private LocalDateTime expiresAt;
 

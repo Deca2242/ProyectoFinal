@@ -21,7 +21,7 @@ public interface SeatHoldRepository extends JpaRepository<SeatHold, Long> {
     // Buscar todos los holds de un usuario con estado específico
     List<SeatHold> findByUserIdAndStatus(Long userId, SeatHold.HoldStatus status);
 
-    // Buscar hold activo para un asiento (estado HOLD y no expirado)
+    // Holds activos (estado HOLD y no expirados) de un asiento; puede haber varios si reservan tramos distintos
     @Query("""
                 SELECT h FROM SeatHold h
                 WHERE h.trip.id = :tripId
@@ -29,7 +29,7 @@ public interface SeatHoldRepository extends JpaRepository<SeatHold, Long> {
                 AND h.status = 'HOLD'
                 AND h.expiresAt > :now
             """)
-    Optional<SeatHold> findActiveHold(
+    List<SeatHold> findActiveHolds(
             @Param("tripId") Long tripId,
             @Param("seatNumber") Integer seatNumber,
             @Param("now") LocalDateTime now);
@@ -76,16 +76,23 @@ public interface SeatHoldRepository extends JpaRepository<SeatHold, Long> {
             @Param("userId") Long userId,
             @Param("now") LocalDateTime now);
 
-    // Validar si un asiento tiene hold activo (para validación de tramos)
+    // Holds activos de un asiento que se solapan con el tramo indicado (por orden de parada).
+    // Un hold sin paradas bloquea todo el viaje, por lo que siempre se solapa.
     @Query("""
                 SELECT h FROM SeatHold h
+                LEFT JOIN h.fromStop fs
+                LEFT JOIN h.toStop ts
                 WHERE h.trip.id = :tripId
                 AND h.seatNumber = :seatNumber
                 AND h.status = 'HOLD'
                 AND h.expiresAt > :now
+                AND (fs IS NULL OR ts IS NULL
+                     OR (fs.order < :toStopOrder AND ts.order > :fromStopOrder))
             """)
-    Optional<SeatHold> findActiveHoldForSegment(
+    List<SeatHold> findOverlappingActiveHolds(
             @Param("tripId") Long tripId,
             @Param("seatNumber") Integer seatNumber,
+            @Param("fromStopOrder") Integer fromStopOrder,
+            @Param("toStopOrder") Integer toStopOrder,
             @Param("now") LocalDateTime now);
 }

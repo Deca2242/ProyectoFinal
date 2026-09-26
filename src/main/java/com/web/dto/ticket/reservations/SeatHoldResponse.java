@@ -12,6 +12,8 @@ public record SeatHoldResponse(
     Long userId,
     LocalDateTime expiresAt,
     SeatHold.HoldStatus status,
-    LocalDateTime createdAt
+    LocalDateTime createdAt,
+    Long fromStopId,  // null si el hold cubre todo el viaje
+    Long toStopId
 ) implements Serializable {}
 

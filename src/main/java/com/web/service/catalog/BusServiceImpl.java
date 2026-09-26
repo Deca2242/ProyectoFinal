@@ -8,6 +8,7 @@ import com.web.entity.Bus;
 import com.web.exception.BusinessException;
 import com.web.exception.ResourceNotFoundException;
 import com.web.repository.BusRepository;
+import com.web.repository.TripRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -15,7 +16,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 
@@ -25,6 +28,7 @@ import java.util.stream.Collectors;
 public class BusServiceImpl implements BusService {
 
     private final BusRepository busRepository;
+    private final TripRepository tripRepository;
     private final BusMapper busMapper;
 
     // Registra un nuevo bus validando que la placa sea única
@@ -97,12 +101,16 @@ public class BusServiceImpl implements BusService {
 
     }
 
-    //Obtener bus disponibles (activos)
+    // Obtener buses disponibles en una fecha: activos y sin otro viaje (no cancelado) ese día
     @Override
     @Transactional(readOnly = true)
     public List<BusResponse> getAvailableBuses(LocalDate date) {
+        Set<Long> busyBusIds = date == null
+                ? Set.of()
+                : new HashSet<>(tripRepository.findBusIdsWithTripsOnDate(date));
         List<Bus> buses = busRepository.findAll().stream()
                 .filter(b -> b.getStatus() == Bus.BusStatus.ACTIVE)
+                .filter(b -> !busyBusIds.contains(b.getId()))
                 .collect(Collectors.toList());
         return busMapper.toResponseList(buses);
     }

@@ -10,6 +10,7 @@ import com.web.entity.User;
 import com.web.exception.ResourceNotFoundException;
 import com.web.exception.SeatNotAvailableException;
 import com.web.repository.SeatHoldRepository;
+import com.web.repository.StopRepository;
 import com.web.repository.TicketRepository;
 import com.web.repository.TripRepository;
 import com.web.repository.UserRepository;
@@ -40,6 +41,8 @@ class SeatHoldServiceImplTest {
     private TicketRepository ticketRepository;
     @Mock
     private TripRepository tripRepository;
+    @Mock
+    private StopRepository stopRepository;
     @Mock
     private UserRepository userRepository;
     @Mock
@@ -88,7 +91,7 @@ class SeatHoldServiceImplTest {
                 LocalDateTime.now().plusMinutes(10),
                 SeatHold.HoldStatus.HOLD,
                 LocalDateTime.now()
-        );
+        , null, null);
     }
 
     @Test
@@ -98,11 +101,10 @@ class SeatHoldServiceImplTest {
 
         when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
         when(userRepository.findById(1L)).thenReturn(Optional.of(user));
-        when(seatHoldRepository.findActiveHold(eq(1L), eq(10), any(LocalDateTime.class)))
-                .thenReturn(Optional.empty());
+        when(seatHoldRepository.findOverlappingActiveHolds(eq(1L), eq(10), eq(Integer.MIN_VALUE), eq(Integer.MAX_VALUE), any(LocalDateTime.class)))
+                .thenReturn(List.of());
         when(ticketRepository.isSeatAvailableForFullTrip(1L, 10)).thenReturn(true);
         when(configService.getHoldDurationMinutes()).thenReturn(10);
-        when(seatHoldMapper.toEntity(request)).thenReturn(seatHold);
         when(seatHoldRepository.save(any(SeatHold.class))).thenAnswer(inv -> {
             SeatHold sh = inv.getArgument(0);
             sh.setId(1L);
@@ -129,11 +131,10 @@ class SeatHoldServiceImplTest {
 
         when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
         when(userRepository.findById(1L)).thenReturn(Optional.of(user));
-        when(seatHoldRepository.findActiveHold(eq(1L), eq(10), any(LocalDateTime.class)))
-                .thenReturn(Optional.empty());
+        when(seatHoldRepository.findOverlappingActiveHolds(eq(1L), eq(10), eq(Integer.MIN_VALUE), eq(Integer.MAX_VALUE), any(LocalDateTime.class)))
+                .thenReturn(List.of());
         when(ticketRepository.isSeatAvailableForFullTrip(1L, 10)).thenReturn(true);
         when(configService.getHoldDurationMinutes()).thenReturn(10);
-        when(seatHoldMapper.toEntity(request)).thenReturn(seatHold);
         when(seatHoldRepository.save(any(SeatHold.class))).thenAnswer(inv -> {
             SeatHold sh = inv.getArgument(0);
             sh.setId(1L);
@@ -164,8 +165,8 @@ class SeatHoldServiceImplTest {
 
         when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
         when(userRepository.findById(1L)).thenReturn(Optional.of(user));
-        when(seatHoldRepository.findActiveHold(eq(1L), eq(10), any(LocalDateTime.class)))
-                .thenReturn(Optional.of(existingHold));
+        when(seatHoldRepository.findOverlappingActiveHolds(eq(1L), eq(10), eq(Integer.MIN_VALUE), eq(Integer.MAX_VALUE), any(LocalDateTime.class)))
+                .thenReturn(List.of(existingHold));
 
         // When/Then
         assertThatThrownBy(() -> seatHoldService.createHold(request, 1L))
@@ -176,15 +177,15 @@ class SeatHoldServiceImplTest {
     @Test
     void shouldHasActiveHold_WithActiveHold_ReturnTrue() {
         // Given
-        when(seatHoldRepository.findActiveHold(eq(1L), eq(10), any(LocalDateTime.class)))
-                .thenReturn(Optional.of(seatHold));
+        when(seatHoldRepository.findActiveHolds(eq(1L), eq(10), any(LocalDateTime.class)))
+                .thenReturn(List.of(seatHold));
 
         // When
         boolean result = seatHoldService.hasActiveHold(1L, 10);
 
         // Then
         assertThat(result).isTrue();
-        verify(seatHoldRepository).findActiveHold(eq(1L), eq(10), any(LocalDateTime.class));
+        verify(seatHoldRepository).findActiveHolds(eq(1L), eq(10), any(LocalDateTime.class));
     }
 
     @Test

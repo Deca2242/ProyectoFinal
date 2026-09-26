@@ -132,7 +132,7 @@ class DispatcherOverbookingTest {
                 10, 1L, "Bogotá", 1, 2L, "Medellín", 2,
                 BigDecimal.valueOf(50000), Ticket.PaymentMethod.CARD,
                 Ticket.TicketStatus.SOLD, "TKT-2025-001-ABC123", LocalDateTime.now(), null
-        );
+        , null);
 
         when(ticketService.purchaseTicket(any(TicketCreateRequest.class))).thenReturn(response);
 

@@ -123,9 +123,11 @@ public class ParcelServiceImpl implements ParcelService {
         return parcelMapper.toResponse(updatedParcel);
     }
 
-    // Entrega una encomienda validando el OTP y guardando foto de prueba
+    // Entrega una encomienda validando el OTP y guardando foto de prueba.
+    // noRollbackFor: con OTP inválido se guardan el estado FAILED y el incidente antes de lanzar el error;
+    // sin él, la excepción deshacía ambos cambios
     @Override
-    @Transactional
+    @Transactional(noRollbackFor = BusinessException.class)
     public ParcelResponse deliverWithOtp(Long parcelId, String otp, String photoUrl) {
         Parcel parcel = parcelRepository.findById(parcelId)
                 .orElseThrow(() -> new ResourceNotFoundException("Encomienda", parcelId));

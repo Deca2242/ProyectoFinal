@@ -8,6 +8,7 @@ import com.web.entity.Bus;
 import com.web.exception.BusinessException;
 import com.web.exception.ResourceNotFoundException;
 import com.web.repository.BusRepository;
+import com.web.repository.TripRepository;
 import org.springframework.http.HttpStatus;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -34,6 +35,9 @@ class BusServiceImplTest {
     private BusRepository busRepository;
     @Mock
     private BusMapper busMapper;
+
+    @Mock
+    private TripRepository tripRepository;
 
     @InjectMocks
     private BusServiceImpl busService;
@@ -296,5 +300,35 @@ class BusServiceImplTest {
         // Then
         assertThat(result).isEmpty();
         verify(busMapper).toResponseList(List.of());
+    }
+
+    @Test
+    void shouldGetAvailableBuses_WithBusAlreadyScheduled_ExcludeIt() {
+        // Given
+        Bus busyBus = Bus.builder().id(2L).plate("XYZ789").capacity(40).status(Bus.BusStatus.ACTIVE).build();
+        LocalDate date = LocalDate.of(2026, 1, 15);
+        when(busRepository.findAll()).thenReturn(List.of(bus, busyBus));
+        when(tripRepository.findBusIdsWithTripsOnDate(date)).thenReturn(List.of(2L));
+        when(busMapper.toResponseList(anyList())).thenReturn(List.of(busResponse));
+
+        // When
+        busService.getAvailableBuses(date);
+
+        // Then: solo se mapea el bus sin viaje ese día
+        verify(busMapper).toResponseList(argThat(list -> list.size() == 1 && list.get(0).getId().equals(bus.getId())));
+    }
+
+    @Test
+    void shouldGetAvailableBuses_WithNullDate_NotQueryTrips() {
+        // Given
+        when(busRepository.findAll()).thenReturn(List.of(bus));
+        when(busMapper.toResponseList(anyList())).thenReturn(List.of(busResponse));
+
+        // When
+        List<BusResponse> result = busService.getAvailableBuses(null);
+
+        // Then
+        assertThat(result).hasSize(1);
+        verifyNoInteractions(tripRepository);
     }
 }

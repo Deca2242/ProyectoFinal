@@ -57,6 +57,10 @@ public class Ticket {
     @Builder.Default
     private LocalDateTime purchasedAt = LocalDateTime.now();
 
+    // Momento en que el pasajero abordó (validación del QR); null si aún no aborda
+    @Column(name = "boarded_at")
+    private LocalDateTime boardedAt;
+
     // Relación one-to-one con Baggage
     @OneToOne(mappedBy = "ticket", cascade = CascadeType.ALL, orphanRemoval = true)
     private Baggage baggage;

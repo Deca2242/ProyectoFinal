@@ -125,4 +125,12 @@ public interface TripRepository extends JpaRepository<Trip, Long> {
         @Param("startDate") LocalDate startDate,
         @Param("endDate") LocalDate endDate
     );
+
+    // IDs de buses que ya tienen un viaje no cancelado en la fecha (para disponibilidad de flota)
+    @Query("""
+                SELECT DISTINCT t.bus.id FROM Trip t
+                WHERE t.tripDate = :date
+                AND t.status <> 'CANCELLED'
+            """)
+    List<Long> findBusIdsWithTripsOnDate(@Param("date") LocalDate date);
 }

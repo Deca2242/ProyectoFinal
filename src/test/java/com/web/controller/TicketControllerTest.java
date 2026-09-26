@@ -67,7 +67,7 @@ class TicketControllerTest {
     @WithMockUser
     void holdSeat_shouldReturn201() throws Exception {
         var req = new SeatHoldRequest(1L, 1L, 2L);
-        var resp = new SeatHoldResponse(1L, 1L, 10, 1L, LocalDateTime.now().plusMinutes(10), SeatHold.HoldStatus.HOLD, LocalDateTime.now());
+        var resp = new SeatHoldResponse(1L, 1L, 10, 1L, LocalDateTime.now().plusMinutes(10), SeatHold.HoldStatus.HOLD, LocalDateTime.now(), null, null);
 
         when(seatHoldService.createHold(any(), any(), any())).thenReturn(resp);
 
@@ -94,7 +94,7 @@ class TicketControllerTest {
                 10, 1L, "Origin", 1, 2L, "Destination", 2,
                 BigDecimal.valueOf(50000), Ticket.PaymentMethod.CASH,
                 Ticket.TicketStatus.SOLD, "QR123", LocalDateTime.now(), null
-        );
+        , null);
 
         when(ticketService.purchaseTicket(any())).thenReturn(resp);
 
@@ -151,7 +151,7 @@ class TicketControllerTest {
                 10, 1L, "Origin", 1, 2L, "Destination", 2,
                 BigDecimal.valueOf(50000), Ticket.PaymentMethod.CASH,
                 Ticket.TicketStatus.SOLD, "QR123", LocalDateTime.now(), null
-        );
+        , null);
 
         when(ticketService.getTicketById(1L)).thenReturn(resp);
 
@@ -184,7 +184,7 @@ class TicketControllerTest {
                 10, 1L, "Origin", 1, 2L, "Destination", 2,
                 BigDecimal.valueOf(50000), Ticket.PaymentMethod.CASH,
                 Ticket.TicketStatus.SOLD, "QR123", LocalDateTime.now(), null
-        ));
+        , null));
 
         when(userRepository.findByEmail("user@example.com")).thenReturn(Optional.of(user));
         when(ticketService.getUserTickets(1L)).thenReturn(resp);

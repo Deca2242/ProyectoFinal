@@ -121,16 +121,49 @@ class AdditionalQueriesRepositoryTest extends BaseRepositoryTest {
     }
 
     @Test
-    @DisplayName("findTicketsBySegment: solo tickets SOLD con exactamente ese origen y destino")
+    @DisplayName("findTicketsBySegment: tickets SOLD a bordo en algún punto del tramo (por orden de parada)")
     void ticket_findTicketsBySegment() {
         persistTicket(1, stopA, stopB, Ticket.TicketStatus.SOLD, Ticket.PaymentMethod.CASH, "20000");
         persistTicket(2, stopA, stopB, Ticket.TicketStatus.CANCELLED, Ticket.PaymentMethod.CASH, "20000");
         persistTicket(3, stopA, stopC, Ticket.TicketStatus.SOLD, Ticket.PaymentMethod.CASH, "40000");
+        persistTicket(4, stopB, stopC, Ticket.TicketStatus.SOLD, Ticket.PaymentMethod.CASH, "20000");
         em.flush();
 
-        List<Ticket> result = ticketRepository.findTicketsBySegment(trip.getId(), stopA.getId(), stopB.getId());
+        // Tramo A -> B: el de A -> C también va a bordo; el de B -> C sube justo cuando termina el tramo
+        assertThat(ticketRepository.findTicketsBySegment(trip.getId(), stopA.getOrder(), stopB.getOrder()))
+                .extracting(Ticket::getSeatNumber).containsExactly(1, 3);
+        // Tramo B -> C
+        assertThat(ticketRepository.findTicketsBySegment(trip.getId(), stopB.getOrder(), stopC.getOrder()))
+                .extracting(Ticket::getSeatNumber).containsExactly(3, 4);
+    }
 
-        assertThat(result).extracting(Ticket::getSeatNumber).containsExactly(1);
+    @Test
+    @DisplayName("findByTripIdAndStatus: tickets de un viaje filtrados por estado")
+    void ticket_findByTripIdAndStatus() {
+        persistTicket(1, stopA, stopB, Ticket.TicketStatus.SOLD, Ticket.PaymentMethod.CASH, "20000");
+        persistTicket(2, stopA, stopB, Ticket.TicketStatus.CANCELLED, Ticket.PaymentMethod.CASH, "20000");
+        em.flush();
+
+        assertThat(ticketRepository.findByTripIdAndStatus(trip.getId(), Ticket.TicketStatus.SOLD))
+                .extracting(Ticket::getSeatNumber).containsExactly(1);
+    }
+
+    @Test
+    @DisplayName("findUnboardedTicketsDepartingBetween: solo SOLD sin abordar, desde la primera parada y en la ventana")
+    void ticket_findUnboardedTicketsDepartingBetween() {
+        LocalDateTime now = LocalDateTime.now();
+        trip.setDepartureTime(now.plusMinutes(3));
+        Ticket unboarded = persistTicket(1, stopA, stopC, Ticket.TicketStatus.SOLD, Ticket.PaymentMethod.CASH, "20000");
+        Ticket boarded = persistTicket(2, stopA, stopC, Ticket.TicketStatus.SOLD, Ticket.PaymentMethod.CASH, "20000");
+        boarded.setBoardedAt(now.minusMinutes(10));
+        persistTicket(3, stopB, stopC, Ticket.TicketStatus.SOLD, Ticket.PaymentMethod.CASH, "20000");
+        persistTicket(4, stopA, stopC, Ticket.TicketStatus.CANCELLED, Ticket.PaymentMethod.CASH, "20000");
+        em.flush();
+
+        assertThat(ticketRepository.findUnboardedTicketsDepartingBetween(now, now.plusMinutes(5)))
+                .extracting(Ticket::getId).containsExactly(unboarded.getId());
+        // Fuera de la ventana no se devuelve nada
+        assertThat(ticketRepository.findUnboardedTicketsDepartingBetween(now, now.plusMinutes(1))).isEmpty();
     }
 
     @Test
@@ -268,6 +301,63 @@ class AdditionalQueriesRepositoryTest extends BaseRepositoryTest {
                 .extracting(User::getEmail).containsExactly("driver1@test.com");
         assertThat(userRepository.findByRoleAndStatus(User.Role.DRIVER, User.Status.INACTIVE))
                 .extracting(User::getEmail).containsExactly("driver2@test.com");
+    }
+
+    // ---------- TripRepository ----------
+
+    @Test
+    @DisplayName("findBusIdsWithTripsOnDate: buses con viajes no cancelados en la fecha")
+    void trip_findBusIdsWithTripsOnDate() {
+        Bus otherBus = em.persist(Bus.builder()
+                .plate("OTR456")
+                .capacity(40)
+                .amenities(new HashMap<>())
+                .status(Bus.BusStatus.ACTIVE)
+                .build());
+        Trip cancelled = persistTrip(tripDate);
+        cancelled.setBus(otherBus);
+        cancelled.setStatus(Trip.TripStatus.CANCELLED);
+        em.flush();
+
+        assertThat(tripRepository.findBusIdsWithTripsOnDate(tripDate)).containsExactly(bus.getId());
+        assertThat(tripRepository.findBusIdsWithTripsOnDate(tripDate.plusDays(1))).isEmpty();
+    }
+
+    // ---------- SeatHoldRepository ----------
+
+    @Test
+    @DisplayName("findOverlappingActiveHolds: holds por tramo solo se solapan si comparten parte del recorrido")
+    void seatHold_findOverlappingActiveHolds() {
+        LocalDateTime now = LocalDateTime.now();
+        SeatHold segmentHold = em.persist(SeatHold.builder()
+                .trip(trip).seatNumber(8).user(passenger)
+                .fromStop(stopA).toStop(stopB)
+                .expiresAt(now.plusMinutes(10))
+                .status(SeatHold.HoldStatus.HOLD)
+                .build());
+        em.persist(SeatHold.builder()
+                .trip(trip).seatNumber(8).user(passenger)
+                .fromStop(stopB).toStop(stopC)
+                .expiresAt(now.minusMinutes(1)) // expirado
+                .status(SeatHold.HoldStatus.HOLD)
+                .build());
+        SeatHold fullTripHold = em.persist(SeatHold.builder()
+                .trip(trip).seatNumber(9).user(passenger)
+                .expiresAt(now.plusMinutes(10))
+                .status(SeatHold.HoldStatus.HOLD)
+                .build());
+        em.flush();
+
+        // A -> B se solapa con el hold A -> B
+        assertThat(seatHoldRepository.findOverlappingActiveHolds(trip.getId(), 8, 1, 2, now))
+                .extracting(SeatHold::getId).containsExactly(segmentHold.getId());
+        // B -> C es contiguo a A -> B y el hold B -> C está expirado
+        assertThat(seatHoldRepository.findOverlappingActiveHolds(trip.getId(), 8, 2, 3, now)).isEmpty();
+        // Un hold sin tramo bloquea cualquier tramo
+        assertThat(seatHoldRepository.findOverlappingActiveHolds(trip.getId(), 9, 2, 3, now))
+                .extracting(SeatHold::getId).containsExactly(fullTripHold.getId());
+        // findActiveHolds ignora el tramo
+        assertThat(seatHoldRepository.findActiveHolds(trip.getId(), 8, now)).hasSize(1);
     }
 
     // ---------- Migración V3 ----------

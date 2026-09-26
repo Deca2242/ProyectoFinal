@@ -75,7 +75,7 @@ class PaymentServiceImplTest {
                 10, 1L, "Origin", 1, 2L, "Destination", 2,
                 BigDecimal.valueOf(50000), Ticket.PaymentMethod.CASH,
                 Ticket.TicketStatus.SOLD, "QR123", LocalDateTime.now(), null
-        );
+        , null);
     }
 
     @Test

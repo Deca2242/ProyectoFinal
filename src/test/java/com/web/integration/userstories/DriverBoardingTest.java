@@ -88,7 +88,7 @@ class DriverBoardingTest {
                 10, 1L, "Bogotá", 1, 2L, "Medellín", 2,
                 BigDecimal.valueOf(50000), Ticket.PaymentMethod.CARD,
                 Ticket.TicketStatus.SOLD, "TKT-2025-001-ABC123", LocalDateTime.now(), null
-        );
+        , null);
 
         when(ticketService.getTicketByQrCode("TKT-2025-001-ABC123")).thenReturn(ticketResponse);
 
@@ -127,7 +127,7 @@ class DriverBoardingTest {
                 10, 1L, "Bogotá", 1, 2L, "Medellín", 2,
                 BigDecimal.valueOf(50000), Ticket.PaymentMethod.CARD,
                 Ticket.TicketStatus.SOLD, "TKT-2025-001-ABC123", LocalDateTime.now(), null
-        );
+        , null);
         var passenger2 = new TicketResponse(
                 2L, 1L, "Bogotá - Medellín", LocalDate.now().plusDays(1),
                 LocalDateTime.now().plusDays(1).plusHours(8),
@@ -135,7 +135,7 @@ class DriverBoardingTest {
                 15, 1L, "Bogotá", 1, 2L, "Medellín", 2,
                 BigDecimal.valueOf(50000), Ticket.PaymentMethod.CASH,
                 Ticket.TicketStatus.SOLD, "TKT-2025-002-XYZ456", LocalDateTime.now(), null
-        );
+        , null);
 
         when(tripService.getPassengersBySegment(1L, 1L, 2L))
                 .thenReturn(List.of(passenger1, passenger2));

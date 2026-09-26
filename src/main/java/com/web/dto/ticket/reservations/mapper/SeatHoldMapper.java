@@ -14,6 +14,8 @@ public interface SeatHoldMapper {
     // Entity → Response
     @Mapping(target = "tripId", source = "trip.id")
     @Mapping(target = "userId", source = "user.id")
+    @Mapping(target = "fromStopId", source = "fromStop.id")
+    @Mapping(target = "toStopId", source = "toStop.id")
     SeatHoldResponse toResponse(SeatHold seatHold);
     
     List<SeatHoldResponse> toResponseList(List<SeatHold> seatHolds);
@@ -25,6 +27,8 @@ public interface SeatHoldMapper {
     @Mapping(target = "expiresAt", ignore = true) // Se calcula en servicio
     @Mapping(target = "status", constant = "HOLD")
     @Mapping(target = "createdAt", ignore = true)
+    @Mapping(target = "fromStop", ignore = true)
+    @Mapping(target = "toStop", ignore = true)
     SeatHold toEntity(SeatHoldCreateRequest request);
 }
 

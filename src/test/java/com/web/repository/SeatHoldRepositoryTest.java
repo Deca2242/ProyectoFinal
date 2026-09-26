@@ -172,22 +172,22 @@ class SeatHoldRepositoryTest extends BaseRepositoryTest {
     @DisplayName("Debe encontrar hold activo para un asiento (no expirado)")
     void shouldFindActiveHold() {
         // When
-        Optional<SeatHold> result = seatHoldRepository.findActiveHold(
+        List<SeatHold> result = seatHoldRepository.findActiveHolds(
                 trip.getId(),
                 15,
                 LocalDateTime.now()
         );
 
         // Then
-        assertThat(result).isPresent();
-        assertThat(result.get().getSeatNumber()).isEqualTo(15);
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).getSeatNumber()).isEqualTo(15);
     }
 
     @Test
     @DisplayName("No debe encontrar hold activo cuando está expirado")
     void shouldNotFindActiveHoldWhenExpired() {
         // When
-        Optional<SeatHold> result = seatHoldRepository.findActiveHold(
+        List<SeatHold> result = seatHoldRepository.findActiveHolds(
                 trip.getId(),
                 10, // Este hold está expirado
                 LocalDateTime.now()
@@ -256,19 +256,21 @@ class SeatHoldRepositoryTest extends BaseRepositoryTest {
     }
 
     @Test
-    @DisplayName("Debe encontrar hold activo para un segmento (nueva query)")
-    void shouldFindActiveHoldForSegment() {
+    @DisplayName("Un hold sin tramo bloquea el asiento en cualquier tramo")
+    void shouldFindFullTripHoldForAnySegment() {
         // When
-        Optional<SeatHold> result = seatHoldRepository.findActiveHoldForSegment(
+        List<SeatHold> result = seatHoldRepository.findOverlappingActiveHolds(
                 trip.getId(),
                 15,
+                2,
+                3,
                 LocalDateTime.now()
         );
 
         // Then
-        assertThat(result).isPresent();
-        assertThat(result.get().getSeatNumber()).isEqualTo(15);
-        assertThat(result.get().getUser().getName()).isEqualTo("Laura Pasajera");
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).getSeatNumber()).isEqualTo(15);
+        assertThat(result.get(0).getUser().getName()).isEqualTo("Laura Pasajera");
     }
 
     @Test

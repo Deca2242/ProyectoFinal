@@ -10,12 +10,15 @@ import com.web.dto.trip.SeatStatusResponse;
 import com.web.dto.trip.mapper.TripMapper;
 import com.web.entity.Bus;
 import com.web.entity.Route;
+import com.web.entity.SeatHold;
 import com.web.entity.Stop;
+import com.web.entity.Ticket;
 import com.web.entity.Trip;
 import com.web.exception.BusinessException;
 import com.web.exception.ResourceNotFoundException;
 import com.web.repository.BusRepository;
 import com.web.repository.RouteRepository;
+import com.web.repository.SeatHoldRepository;
 import com.web.repository.StopRepository;
 import com.web.repository.TicketRepository;
 import com.web.repository.TripRepository;
@@ -26,6 +29,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -38,6 +42,7 @@ public class TripServiceImpl implements TripService {
         private final BusRepository busRepository;
         private final StopRepository stopRepository;
         private final TicketRepository ticketRepository;
+        private final SeatHoldRepository seatHoldRepository;
         private final TripMapper tripMapper;
         private final TicketMapper ticketMapper;
 
@@ -112,7 +117,7 @@ public class TripServiceImpl implements TripService {
                         boolean isSold = ticketRepository.existsByTripIdAndSeatNumberAndStatus(
                                         trip.getId(),
                                         seatNum,
-                                        com.web.entity.Ticket.TicketStatus.SOLD);
+                                        Ticket.TicketStatus.SOLD);
                         if (!isSold) {
                                 availableSeatNumbers.add(seatNum);
                         }
@@ -190,6 +195,10 @@ public class TripServiceImpl implements TripService {
 
                 validateStatusTransition(trip.getStatus(), status);
 
+                if (status == Trip.TripStatus.CANCELLED) {
+                        releaseTicketsAndHolds(trip);
+                }
+
                 trip.setStatus(status);
                 Trip updatedTrip = tripRepository.save(trip);
 
@@ -210,9 +219,32 @@ public class TripServiceImpl implements TripService {
                                         "INVALID_CANCEL");
                 }
 
+                if (trip.getStatus() == Trip.TripStatus.CANCELLED) {
+                        throw new BusinessException("El viaje ya está cancelado",
+                                        HttpStatus.BAD_REQUEST,
+                                        "INVALID_CANCEL");
+                }
+
+                releaseTicketsAndHolds(trip);
+
                 trip.setStatus(Trip.TripStatus.CANCELLED);
                 tripRepository.save(trip);
+        }
 
+        // Al cancelar un viaje se cancelan sus tickets vendidos (reembolso total, la cancelación es de la empresa)
+        // y se liberan los holds activos
+        private void releaseTicketsAndHolds(Trip trip) {
+                List<Ticket> soldTickets = ticketRepository.findByTripIdAndStatus(trip.getId(), Ticket.TicketStatus.SOLD);
+                for (Ticket ticket : soldTickets) {
+                        ticket.setStatus(Ticket.TicketStatus.CANCELLED);
+                }
+                ticketRepository.saveAll(soldTickets);
+
+                List<SeatHold> activeHolds = seatHoldRepository.findActiveHoldsByTrip(trip.getId(), LocalDateTime.now());
+                for (SeatHold hold : activeHolds) {
+                        hold.setStatus(SeatHold.HoldStatus.EXPIRED);
+                }
+                seatHoldRepository.saveAll(activeHolds);
         }
 
         // Obtiene la lista de pasajeros que viajan en un tramo específico
@@ -235,8 +267,15 @@ public class TripServiceImpl implements TripService {
                                         "INVALID_STOPS");
                 }
 
-                List<com.web.entity.Ticket> tickets = ticketRepository.findTicketsBySegment(tripId, fromStopId,
-                                toStopId);
+                if (fromStop.getOrder() >= toStop.getOrder()) {
+                        throw new BusinessException("La parada de origen debe ser anterior a la de destino",
+                                        HttpStatus.BAD_REQUEST,
+                                        "INVALID_SEGMENT");
+                }
+
+                // Todos los pasajeros a bordo en algún punto del tramo, no solo los de origen/destino exactos
+                List<Ticket> tickets = ticketRepository.findTicketsBySegment(tripId, fromStop.getOrder(),
+                                toStop.getOrder());
                 return ticketMapper.toResponseList(tickets);
         }
 

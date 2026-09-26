@@ -116,4 +116,12 @@ public class TicketController {
         TicketResponse response = ticketService.getTicketByQrCode(qrCode);
         return ResponseEntity.ok(response);
     }
+
+    // Registra el abordaje del pasajero validando su código QR
+    @PostMapping("/tickets/qr/{qrCode}/board")
+    @PreAuthorize("hasAnyRole('DRIVER', 'DISPATCHER')")
+    public ResponseEntity<TicketResponse> boardTicket(@PathVariable String qrCode) {
+        TicketResponse response = ticketService.boardTicket(qrCode);
+        return ResponseEntity.ok(response);
+    }
 }

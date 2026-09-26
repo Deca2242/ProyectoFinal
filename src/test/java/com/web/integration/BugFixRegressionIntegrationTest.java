@@ -13,6 +13,7 @@ import com.web.dto.ticket.reservations.SeatHoldRequest;
 import com.web.entity.*;
 import com.web.integration.userstories.BaseIntegrationTest;
 import com.web.repository.*;
+import com.web.service.ticket.TicketServiceImpl;
 import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -63,6 +64,9 @@ class BugFixRegressionIntegrationTest extends BaseIntegrationTest {
 
     @Autowired
     private EntityManager entityManager;
+
+    @Autowired
+    private TicketServiceImpl ticketService;
 
     private Route route;
     private Stop stopA;
@@ -402,6 +406,136 @@ class BugFixRegressionIntegrationTest extends BaseIntegrationTest {
                 .andExpect(jsonPath("$.isActive").value(false));
     }
 
+    // ---------- Decisiones pendientes resueltas ----------
+
+    // Holds por tramo: dos pasajeros pueden reservar el mismo asiento en tramos que no se solapan
+    @Test
+    void segmentHolds_onNonOverlappingSegments_shouldCoexist() throws Exception {
+        String token1 = registerAndLogin("hold1@test.com");
+        Long pax1 = userId("hold1@test.com");
+        String token2 = registerAndLogin("hold2@test.com");
+        Long pax2 = userId("hold2@test.com");
+
+        hold(token1, pax1, 8, stopA, stopB)
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.fromStopId").value(stopA.getId()))
+                .andExpect(jsonPath("$.toStopId").value(stopB.getId()));
+        hold(token2, pax2, 8, stopB, stopC).andExpect(status().isCreated());
+        // A -> C se solapa con los dos holds
+        hold(token2, pax2, 8, stopA, stopC).andExpect(status().isConflict());
+
+        // pax1 compra su tramo y su hold queda como SOLD; el de pax2 sigue activo
+        purchase(token1, pax1, 8, stopA, stopB).andExpect(status().isCreated());
+        entityManager.flush();
+        entityManager.clear();
+        assertThat(seatHoldRepository.findAll())
+                .filteredOn(h -> h.getTrip().getId().equals(trip.getId()) && h.getSeatNumber() == 8)
+                .extracting(SeatHold::getStatus)
+                .containsExactlyInAnyOrder(SeatHold.HoldStatus.SOLD, SeatHold.HoldStatus.HOLD);
+    }
+
+    // Abordaje por QR y no-show: solo quien no abordó queda como NO_SHOW
+    @Test
+    void boarding_thenNoShowProcess_shouldOnlyMarkUnboardedTickets() throws Exception {
+        String token1 = registerAndLogin("board1@test.com");
+        String token2 = registerAndLogin("board2@test.com");
+        Long boardedId = ticketId(purchase(token1, userId("board1@test.com"), 1, stopA, stopC));
+        Long missingId = ticketId(purchase(token2, userId("board2@test.com"), 2, stopA, stopC));
+
+        createUser(new RegisterRequest("Conductor", "driver@test.com", "300", "secreto1", User.Role.DRIVER));
+        String driverToken = login("driver@test.com", "secreto1");
+        String qr = ticketRepository.findById(boardedId).orElseThrow().getQrCode();
+
+        // Con el viaje aún en SCHEDULED no se puede abordar
+        board(driverToken, qr).andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("abordaje no está abierto")));
+
+        Trip boardingTrip = tripRepository.findById(trip.getId()).orElseThrow();
+        boardingTrip.setStatus(Trip.TripStatus.BOARDING);
+        boardingTrip.setDepartureTime(LocalDateTime.now().plusMinutes(3));
+        tripRepository.saveAndFlush(boardingTrip);
+        entityManager.clear();
+
+        board(driverToken, qr).andExpect(status().isOk())
+                .andExpect(jsonPath("$.boardedAt").isNotEmpty());
+        board(driverToken, qr).andExpect(status().isConflict());
+        // Un pasajero no puede registrar abordajes
+        board(token1, qr).andExpect(status().isForbidden());
+
+        ticketService.processNoShows();
+        entityManager.flush();
+        entityManager.clear();
+
+        assertThat(ticketRepository.findById(boardedId).orElseThrow().getStatus()).isEqualTo(Ticket.TicketStatus.SOLD);
+        assertThat(ticketRepository.findById(missingId).orElseThrow().getStatus()).isEqualTo(Ticket.TicketStatus.NO_SHOW);
+    }
+
+    // Cancelar un viaje cancela sus tickets vendidos
+    @Test
+    void cancelTrip_shouldCancelSoldTickets() throws Exception {
+        String token = registerAndLogin("cancel@test.com");
+        Long ticket = ticketId(purchase(token, userId("cancel@test.com"), 3, stopA, stopC));
+        createUser(new RegisterRequest("Admin", "admin@test.com", "300", "secreto1", User.Role.ADMIN));
+        String adminToken = login("admin@test.com", "secreto1");
+
+        mvc.perform(delete("/api/v1/trips/{id}", trip.getId()).header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isNoContent());
+
+        entityManager.flush();
+        entityManager.clear();
+        assertThat(ticketRepository.findById(ticket).orElseThrow().getStatus()).isEqualTo(Ticket.TicketStatus.CANCELLED);
+        assertThat(tripRepository.findById(trip.getId()).orElseThrow().getStatus()).isEqualTo(Trip.TripStatus.CANCELLED);
+    }
+
+    // Buses disponibles: se excluye el que ya tiene un viaje ese día
+    @Test
+    void availableBuses_shouldExcludeBusAlreadyScheduledThatDay() throws Exception {
+        createUser(new RegisterRequest("Despachador", "disp@test.com", "300", "secreto1", User.Role.DISPATCHER));
+        String token = login("disp@test.com", "secreto1");
+        String plate = tripRepository.findById(trip.getId()).orElseThrow().getBus().getPlate();
+
+        mvc.perform(get("/api/v1/buses/available")
+                        .param("date", trip.getTripDate().toString())
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.plate == '" + plate + "')]").isEmpty());
+
+        mvc.perform(get("/api/v1/buses/available")
+                        .param("date", trip.getTripDate().plusDays(1).toString())
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.plate == '" + plate + "')]").isNotEmpty());
+    }
+
+    // Lista de pasajeros por tramo: incluye a quien atraviesa el tramo aunque su origen/destino sea otro
+    @Test
+    void passengersBySegment_shouldIncludePassengersCrossingTheSegment() throws Exception {
+        String token = registerAndLogin("cross@test.com");
+        Long pax = userId("cross@test.com");
+        purchase(token, pax, 4, stopA, stopC).andExpect(status().isCreated());
+        purchase(token, pax, 5, stopB, stopC).andExpect(status().isCreated());
+
+        createUser(new RegisterRequest("Conductor", "driver@test.com", "300", "secreto1", User.Role.DRIVER));
+        String driverToken = login("driver@test.com", "secreto1");
+
+        mvc.perform(get("/api/v1/trips/{tripId}/passengers", trip.getId())
+                        .param("fromStopId", stopA.getId().toString())
+                        .param("toStopId", stopB.getId().toString())
+                        .header("Authorization", "Bearer " + driverToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].seatNumber").value(4));
+    }
+
+    // Los usuarios semilla de V2 pueden iniciar sesión con la contraseña documentada (V5)
+    @Test
+    void seedUsers_shouldLoginWithDocumentedPassword() throws Exception {
+        String token = login("cmbarrera@gmail.com", "Password123");
+        mvc.perform(get("/api/v1/admin/config").header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk());
+        login("driver1@transport.com", "Password123");
+    }
+
     // ---------- Helpers ----------
 
     private ResultActions purchase(String token, Long passengerId, int seat, Stop from, Stop to) throws Exception {
@@ -438,5 +572,21 @@ class BugFixRegressionIntegrationTest extends BaseIntegrationTest {
 
     private Long userId(String email) {
         return userRepository.findByEmail(email).orElseThrow().getId();
+    }
+
+    private ResultActions hold(String token, Long userId, int seat, Stop from, Stop to) throws Exception {
+        return mvc.perform(post("/api/v1/trips/{tripId}/seats/{seat}/hold", trip.getId(), seat)
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(om.writeValueAsString(new SeatHoldRequest(userId, from.getId(), to.getId()))));
+    }
+
+    private ResultActions board(String token, String qr) throws Exception {
+        return mvc.perform(post("/api/v1/tickets/qr/{qr}/board", qr).header("Authorization", "Bearer " + token));
+    }
+
+    private Long ticketId(ResultActions purchase) throws Exception {
+        String body = purchase.andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+        return om.readTree(body).get("id").asLong();
     }
 }

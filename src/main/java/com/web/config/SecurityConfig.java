@@ -90,6 +90,7 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.POST, "/api/v1/cash/close").hasAnyRole("CLERK", "DRIVER")
 
                         // Tickets - requiere autenticación
+                        .requestMatchers(HttpMethod.POST, "/api/v1/tickets/qr/*/board").hasAnyRole("DRIVER", "DISPATCHER")
                         .requestMatchers("/api/v1/trips/*/seats/*/hold").authenticated()
                         .requestMatchers("/api/v1/trips/*/tickets").authenticated()
                         .requestMatchers("/api/v1/tickets/**").authenticated()
