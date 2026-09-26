@@ -11,6 +11,7 @@ import com.web.config.SecurityConfig;
 import com.web.entity.SeatHold;
 import com.web.entity.Ticket;
 import com.web.entity.User;
+import com.web.exception.BusinessException;
 import com.web.exception.InvalidSegmentException;
 import com.web.exception.InvalidStateTransitionException;
 import com.web.exception.OverbookingNotAllowedException;
@@ -26,6 +27,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
 
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -218,7 +220,7 @@ class TicketControllerTest {
                 1L, "Passenger", "passenger@example.com",
                 10, 1L, "Origin", 1, 2L, "Destination", 2,
                 BigDecimal.valueOf(50000), Ticket.PaymentMethod.CASH,
-                Ticket.TicketStatus.SOLD, "QR123", LocalDateTime.now(), null
+                Ticket.TicketStatus.SOLD, "QR123", LocalDateTime.now(), null, null
         );
     }
 
@@ -439,6 +441,76 @@ class TicketControllerTest {
                 .andExpect(status().isForbidden());
 
         verifyNoInteractions(ticketService);
+    }
+
+    // POST /tickets/qr/{qrCode}/board
+
+    // Verifica que un DRIVER registre el abordaje
+    @Test
+    @WithMockUser(roles = "DRIVER")
+    void boardTicket_shouldReturn200ForDriver() throws Exception {
+        when(ticketService.boardTicket("QR123")).thenReturn(ticket());
+
+        mvc.perform(post("/api/v1/tickets/qr/QR123/board"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.qrCode").value("QR123"));
+    }
+
+    // Verifica que un DISPATCHER también pueda registrar el abordaje
+    @Test
+    @WithMockUser(roles = "DISPATCHER")
+    void boardTicket_shouldReturn200ForDispatcher() throws Exception {
+        when(ticketService.boardTicket("QR123")).thenReturn(ticket());
+
+        mvc.perform(post("/api/v1/tickets/qr/QR123/board"))
+                .andExpect(status().isOk());
+    }
+
+    // Verifica que un abordaje repetido responda 409
+    @Test
+    @WithMockUser(roles = "DRIVER")
+    void boardTicket_shouldReturn409WhenAlreadyBoarded() throws Exception {
+        when(ticketService.boardTicket("QR123")).thenThrow(new BusinessException(
+                "El pasajero ya abordó con este ticket", HttpStatus.CONFLICT, "TICKET_ALREADY_BOARDED"));
+
+        mvc.perform(post("/api/v1/tickets/qr/QR123/board"))
+                .andExpect(status().isConflict());
+    }
+
+    // Verifica que un QR inexistente responda 404
+    @Test
+    @WithMockUser(roles = "DRIVER")
+    void boardTicket_shouldReturn404WhenNotFound() throws Exception {
+        when(ticketService.boardTicket("NOPE")).thenThrow(new ResourceNotFoundException("Ticket", "NOPE"));
+
+        mvc.perform(post("/api/v1/tickets/qr/NOPE/board"))
+                .andExpect(status().isNotFound());
+    }
+
+    // Verifica que ni PASSENGER ni CLERK puedan registrar abordajes
+    @Test
+    @WithMockUser(roles = "PASSENGER")
+    void boardTicket_shouldReturn403ForPassenger() throws Exception {
+        mvc.perform(post("/api/v1/tickets/qr/QR123/board"))
+                .andExpect(status().isForbidden());
+
+        verifyNoInteractions(ticketService);
+    }
+
+    @Test
+    @WithMockUser(roles = "CLERK")
+    void boardTicket_shouldReturn403ForClerk() throws Exception {
+        mvc.perform(post("/api/v1/tickets/qr/QR123/board"))
+                .andExpect(status().isForbidden());
+
+        verifyNoInteractions(ticketService);
+    }
+
+    // Verifica que sin autenticación responda 401
+    @Test
+    void boardTicket_shouldReturn401WhenAnonymous() throws Exception {
+        mvc.perform(post("/api/v1/tickets/qr/QR123/board"))
+                .andExpect(status().isUnauthorized());
     }
 
     // GET /tickets/my-tickets

@@ -598,8 +598,8 @@ class TicketServiceImplTest {
                 .expiresAt(LocalDateTime.now().plusMinutes(5))
                 .build();
         stubEntitiesFound();
-        when(seatHoldRepository.findActiveHold(eq(1L), eq(10), any(LocalDateTime.class)))
-                .thenReturn(Optional.of(foreignHold));
+        when(seatHoldRepository.findOverlappingActiveHolds(eq(1L), eq(10), anyInt(), anyInt(), any(LocalDateTime.class)))
+                .thenReturn(List.of(foreignHold));
 
         // When/Then
         assertThatThrownBy(() -> ticketService.purchaseTicket(request))
@@ -627,8 +627,8 @@ class TicketServiceImplTest {
                 .expiresAt(LocalDateTime.now().plusMinutes(5))
                 .build();
         stubEntitiesFound();
-        when(seatHoldRepository.findActiveHold(eq(1L), eq(10), any(LocalDateTime.class)))
-                .thenReturn(Optional.of(ownHold));
+        when(seatHoldRepository.findOverlappingActiveHolds(eq(1L), eq(10), anyInt(), anyInt(), any(LocalDateTime.class)))
+                .thenReturn(List.of(ownHold));
         when(ticketRepository.isSeatAvailableForSegment(1L, 10, 1, 2)).thenReturn(true);
         stubOverbookingCheck(20L, 0.05);
         stubConfigBasePrice(BigDecimal.valueOf(50000));
@@ -678,8 +678,8 @@ class TicketServiceImplTest {
         toStop.setOrder(5);
         TicketCreateRequest request = buildRequest(10, null, null);
         stubEntitiesFound();
-        when(seatHoldRepository.findActiveHold(eq(1L), eq(10), any(LocalDateTime.class)))
-                .thenReturn(Optional.empty());
+        when(seatHoldRepository.findOverlappingActiveHolds(eq(1L), eq(10), anyInt(), anyInt(), any(LocalDateTime.class)))
+                .thenReturn(List.of());
         when(ticketRepository.isSeatAvailableForSegment(1L, 10, 2, 5)).thenReturn(false);
 
         // When/Then: la consulta se hace con el ORDEN (2, 5), no con los IDs (7, 9)
@@ -1300,8 +1300,8 @@ class TicketServiceImplTest {
     }
 
     private void stubSeatFree(int seatNumber) {
-        when(seatHoldRepository.findActiveHold(eq(1L), eq(seatNumber), any(LocalDateTime.class)))
-                .thenReturn(Optional.empty());
+        when(seatHoldRepository.findOverlappingActiveHolds(eq(1L), eq(seatNumber), anyInt(), anyInt(), any(LocalDateTime.class)))
+                .thenReturn(List.of());
         when(ticketRepository.isSeatAvailableForSegment(1L, seatNumber, fromStop.getOrder(), toStop.getOrder()))
                 .thenReturn(true);
     }

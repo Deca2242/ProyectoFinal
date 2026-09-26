@@ -177,6 +177,7 @@ Todos usan la contraseña **`Password123`**. Es solo para desarrollo: en producc
 | Integración / historias de usuario | `src/test/java/com/web/integration/**` | Flujos completos HTTP → BD por rol, y regresiones de los errores corregidos |
 
 - Los tests de repositorio e integración usan **Testcontainers** (`postgres:15-alpine`) y se **omiten automáticamente** si no hay Docker (`@Testcontainers(disabledWithoutDocker = true)`).
+- **Estado actual:** 994 tests, 0 fallos, ejecutados contra PostgreSQL real. Cobertura: 96 % de líneas y 95 % de ramas.
 - **Cobertura:** JaCoCo genera el reporte en `target/site/jacoco/index.html` al ejecutar `./mvnw test`. Se excluyen las clases generadas `*MapperImpl`.
 
 ## Errores corregidos en la revisión
