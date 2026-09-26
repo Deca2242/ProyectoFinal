@@ -127,7 +127,7 @@ class ExceptionsTest {
         // Then
         assertThat(ex).isInstanceOf(BusinessException.class);
         assertThat(ex.getMessage()).isEqualTo("El viaje ha alcanzado el límite de overbooking permitido");
-        // El HttpStatus concreto no se fija aquí: se ajusta al integrar el cambio a 400 BAD_REQUEST
+        assertThat(ex.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(ex.getCode()).isEqualTo("OVERBOOKING_NOT_ALLOWED");
     }
 

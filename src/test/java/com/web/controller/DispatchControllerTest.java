@@ -6,14 +6,22 @@ import com.web.dto.dispatch.Assignment.AssignmentResponse;
 import com.web.dto.trip.TripResponse;
 import com.web.entity.Trip;
 import com.web.config.CustomUserDetailsService;
+import com.web.config.SecurityConfig;
+import com.web.dto.dispatch.Assignment.AssignmentUpdateRequest;
+import com.web.exception.BusinessException;
+import com.web.exception.InvalidStateTransitionException;
+import com.web.exception.ResourceNotFoundException;
 
 import com.web.service.dispatch.AssignmentService;
 import com.web.service.dispatch.BoardingService;
 import com.web.util.JwtTokenProvider;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 
+import org.springframework.context.annotation.Import;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -22,14 +30,22 @@ import org.springframework.test.web.servlet.MockMvc;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 
 @WebMvcTest(DispatchController.class)
+@Import(SecurityConfig.class)
 class DispatchControllerTest {
 
     @Autowired

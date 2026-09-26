@@ -8,9 +8,11 @@ import com.web.entity.Bus;
 import com.web.exception.BusinessException;
 import com.web.exception.ResourceNotFoundException;
 import com.web.repository.BusRepository;
+import org.springframework.http.HttpStatus;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -20,6 +22,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
@@ -163,5 +166,135 @@ class BusServiceImplTest {
         assertThat(result).hasSize(1);
         verify(busRepository).findAll();
     }
-}
+    @Test
+    void shouldCreateBus_WithDuplicatePlate_ThrowConflict() {
+        // Given
+        BusCreateRequest request = new BusCreateRequest("ABC123", 40, null);
+        when(busRepository.findByPlate("ABC123")).thenReturn(Optional.of(bus));
 
+        // When/Then
+        assertThatThrownBy(() -> busService.createBus(request))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("ABC123")
+                .satisfies(ex -> {
+                    BusinessException be = (BusinessException) ex;
+                    assertThat(be.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                    assertThat(be.getCode()).isEqualTo("PLATE_EXISTS");
+                });
+        verify(busRepository, never()).save(any(Bus.class));
+        verifyNoInteractions(busMapper);
+    }
+
+    @Test
+    void shouldGetBusByPlate_WithValidPlate_ReturnBusResponse() {
+        // Given
+        when(busRepository.findByPlate("ABC123")).thenReturn(Optional.of(bus));
+        when(busMapper.toResponse(bus)).thenReturn(busResponse);
+
+        // When
+        BusResponse result = busService.getBusByPlate("ABC123");
+
+        // Then
+        assertThat(result).isEqualTo(busResponse);
+        verify(busRepository).findByPlate("ABC123");
+    }
+
+    @Test
+    void shouldGetBusByPlate_WithNonExistentPlate_ThrowResourceNotFoundException() {
+        // Given
+        when(busRepository.findByPlate("ZZZ999")).thenReturn(Optional.empty());
+
+        // When/Then
+        assertThatThrownBy(() -> busService.getBusByPlate("ZZZ999"))
+                .isInstanceOf(ResourceNotFoundException.class)
+                .hasMessageContaining("ZZZ999");
+        verifyNoInteractions(busMapper);
+    }
+
+    @Test
+    void shouldGetBusById_WithNonExistentId_ThrowResourceNotFoundException() {
+        // Given
+        when(busRepository.findById(99L)).thenReturn(Optional.empty());
+
+        // When/Then
+        assertThatThrownBy(() -> busService.getBusById(99L))
+                .isInstanceOf(ResourceNotFoundException.class)
+                .hasMessageContaining("99");
+        verifyNoInteractions(busMapper);
+    }
+
+    @Test
+    void shouldUpdateBus_WithNonExistentId_ThrowResourceNotFoundException() {
+        // Given
+        BusUpdateRequest request = new BusUpdateRequest(45, null, Bus.BusStatus.ACTIVE);
+        when(busRepository.findById(99L)).thenReturn(Optional.empty());
+
+        // When/Then
+        assertThatThrownBy(() -> busService.updateBus(99L, request))
+                .isInstanceOf(ResourceNotFoundException.class);
+        verify(busRepository, never()).save(any(Bus.class));
+        verifyNoInteractions(busMapper);
+    }
+
+    @Test
+    void shouldDeleteBus_WithNonExistentId_ThrowResourceNotFoundException() {
+        // Given
+        when(busRepository.findById(99L)).thenReturn(Optional.empty());
+
+        // When/Then
+        assertThatThrownBy(() -> busService.deleteBus(99L))
+                .isInstanceOf(ResourceNotFoundException.class);
+        verify(busRepository, never()).save(any(Bus.class));
+    }
+
+    @Test
+    void shouldDeleteBus_WithValidId_NotDeletePhysically() {
+        // Given
+        when(busRepository.findById(1L)).thenReturn(Optional.of(bus));
+
+        // When
+        busService.deleteBus(1L);
+
+        // Then: el bus pasa a mantenimiento en lugar de borrarse
+        assertThat(bus.getStatus()).isEqualTo(Bus.BusStatus.MAINTENANCE);
+        verify(busRepository).save(bus);
+        verify(busRepository, never()).delete(any(Bus.class));
+    }
+
+    @Test
+    void shouldGetAvailableBuses_WithMixedStatuses_ReturnOnlyActive() {
+        // Given
+        Bus inMaintenance = Bus.builder().id(2L).plate("DEF456").capacity(30)
+                .status(Bus.BusStatus.MAINTENANCE).build();
+        Bus retired = Bus.builder().id(3L).plate("GHI789").capacity(20)
+                .status(Bus.BusStatus.RETIRED).build();
+        Bus otherActive = Bus.builder().id(4L).plate("JKL012").capacity(45)
+                .status(Bus.BusStatus.ACTIVE).build();
+        when(busRepository.findAll()).thenReturn(List.of(bus, inMaintenance, retired, otherActive));
+        when(busMapper.toResponseList(anyList())).thenReturn(List.of(busResponse));
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<Bus>> captor = ArgumentCaptor.forClass(List.class);
+
+        // When
+        busService.getAvailableBuses(LocalDate.of(2026, 1, 15));
+
+        // Then: solo se mapean los buses ACTIVE
+        verify(busMapper).toResponseList(captor.capture());
+        assertThat(captor.getValue()).containsExactly(bus, otherActive);
+    }
+
+    @Test
+    void shouldGetAvailableBuses_WithoutActiveBuses_ReturnEmptyList() {
+        // Given
+        bus.setStatus(Bus.BusStatus.MAINTENANCE);
+        when(busRepository.findAll()).thenReturn(List.of(bus));
+        when(busMapper.toResponseList(List.of())).thenReturn(List.of());
+
+        // When
+        List<BusResponse> result = busService.getAvailableBuses(LocalDate.of(2026, 1, 15));
+
+        // Then
+        assertThat(result).isEmpty();
+        verify(busMapper).toResponseList(List.of());
+    }
+}
