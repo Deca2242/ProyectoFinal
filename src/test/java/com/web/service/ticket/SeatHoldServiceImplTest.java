@@ -18,6 +18,7 @@ import com.web.service.admin.ConfigService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -201,6 +202,90 @@ class SeatHoldServiceImplTest {
         verify(seatHoldRepository).save(argThat(sh -> 
             sh.getStatus() == SeatHold.HoldStatus.SOLD
         ));
+    }
+
+    @Test
+    void shouldReleaseHold_WithNonExistentHold_ThrowResourceNotFound() {
+        // Given
+        when(seatHoldRepository.findById(99L)).thenReturn(Optional.empty());
+
+        // When/Then
+        assertThatThrownBy(() -> seatHoldService.releaseHold(99L))
+                .isInstanceOf(ResourceNotFoundException.class)
+                .hasMessageContaining("Hold");
+        verify(seatHoldRepository, never()).save(any());
+    }
+
+    @Test
+    void shouldGetActiveHoldsByTrip_WithTripId_QueryActiveHoldsAtCurrentTime() {
+        // Given
+        LocalDateTime before = LocalDateTime.now();
+        List<SeatHold> holds = List.of(seatHold);
+        when(seatHoldRepository.findActiveHoldsByTrip(eq(1L), any(LocalDateTime.class))).thenReturn(holds);
+        when(seatHoldMapper.toResponseList(holds)).thenReturn(List.of(seatHoldResponse));
+
+        // When
+        List<SeatHoldResponse> result = seatHoldService.getActiveHoldsByTrip(1L);
+
+        // Then
+        assertThat(result).containsExactly(seatHoldResponse);
+        ArgumentCaptor<LocalDateTime> nowCaptor = ArgumentCaptor.forClass(LocalDateTime.class);
+        verify(seatHoldRepository).findActiveHoldsByTrip(eq(1L), nowCaptor.capture());
+        assertThat(nowCaptor.getValue()).isAfterOrEqualTo(before);
+    }
+
+    @Test
+    void shouldGetUserActiveHolds_WithExpiredHolds_FilterThemOut() {
+        // Given: un hold vigente y otro que sigue en HOLD pero ya expiró
+        SeatHold expired = SeatHold.builder()
+                .id(2L)
+                .trip(trip)
+                .user(user)
+                .seatNumber(11)
+                .status(SeatHold.HoldStatus.HOLD)
+                .expiresAt(LocalDateTime.now().minusMinutes(5))
+                .build();
+        when(seatHoldRepository.findByUserIdAndStatus(1L, SeatHold.HoldStatus.HOLD))
+                .thenReturn(List.of(seatHold, expired));
+        when(seatHoldMapper.toResponseList(anyList())).thenReturn(List.of(seatHoldResponse));
+
+        // When
+        List<SeatHoldResponse> result = seatHoldService.getUserActiveHolds(1L);
+
+        // Then
+        assertThat(result).hasSize(1);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<SeatHold>> captor = ArgumentCaptor.forClass(List.class);
+        verify(seatHoldMapper).toResponseList(captor.capture());
+        assertThat(captor.getValue()).containsExactly(seatHold);
+    }
+
+    @Test
+    void shouldGetUserActiveHolds_WithoutHolds_ReturnEmptyList() {
+        // Given
+        when(seatHoldRepository.findByUserIdAndStatus(1L, SeatHold.HoldStatus.HOLD)).thenReturn(List.of());
+        when(seatHoldMapper.toResponseList(List.of())).thenReturn(List.of());
+
+        // When
+        List<SeatHoldResponse> result = seatHoldService.getUserActiveHolds(1L);
+
+        // Then
+        assertThat(result).isEmpty();
+    }
+
+    @Test
+    void shouldExpireOldHolds_WhenScheduled_ExpireHoldsAtCurrentTime() {
+        // Given
+        LocalDateTime before = LocalDateTime.now();
+        when(seatHoldRepository.expireHolds(any(LocalDateTime.class))).thenReturn(3);
+
+        // When
+        seatHoldService.expireOldHolds();
+
+        // Then
+        ArgumentCaptor<LocalDateTime> nowCaptor = ArgumentCaptor.forClass(LocalDateTime.class);
+        verify(seatHoldRepository).expireHolds(nowCaptor.capture());
+        assertThat(nowCaptor.getValue()).isAfterOrEqualTo(before).isBeforeOrEqualTo(LocalDateTime.now());
     }
 
     @Test

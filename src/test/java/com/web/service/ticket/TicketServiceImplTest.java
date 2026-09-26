@@ -6,6 +6,7 @@ import com.web.dto.ticket.TicketCreateRequest;
 import com.web.dto.ticket.TicketResponse;
 import com.web.dto.ticket.mapper.TicketMapper;
 import com.web.entity.*;
+import com.web.exception.BusinessException;
 import com.web.exception.InvalidSegmentException;
 import com.web.exception.OverbookingNotAllowedException;
 import com.web.exception.ResourceNotFoundException;
@@ -16,13 +17,21 @@ import com.web.util.QrCodeGenerator;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.NullAndEmptySource;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpStatus;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -452,6 +461,867 @@ class TicketServiceImplTest {
         assertThat(result).isNotNull();
         assertThat(result).hasSize(1);
         verify(ticketRepository).findByPassengerId(1L);
+    }
+
+    // ==================== purchaseTicket: entidades inexistentes ====================
+
+    @Test
+    void shouldPurchaseTicket_WithNonExistentTrip_ThrowResourceNotFound() {
+        // Given
+        TicketCreateRequest request = buildRequest(10, null, null);
+        when(tripRepository.findById(1L)).thenReturn(Optional.empty());
+
+        // When/Then
+        assertThatThrownBy(() -> ticketService.purchaseTicket(request))
+                .isInstanceOf(ResourceNotFoundException.class)
+                .hasMessageContaining("Viaje");
+        verifyNoInteractions(userRepository, stopRepository, ticketRepository);
+    }
+
+    @Test
+    void shouldPurchaseTicket_WithNonExistentPassenger_ThrowResourceNotFound() {
+        // Given
+        TicketCreateRequest request = buildRequest(10, null, null);
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+        when(userRepository.findById(1L)).thenReturn(Optional.empty());
+
+        // When/Then
+        assertThatThrownBy(() -> ticketService.purchaseTicket(request))
+                .isInstanceOf(ResourceNotFoundException.class)
+                .hasMessageContaining("Pasajero");
+        verifyNoInteractions(stopRepository, ticketRepository);
+    }
+
+    @Test
+    void shouldPurchaseTicket_WithNonExistentFromStop_ThrowResourceNotFound() {
+        // Given
+        TicketCreateRequest request = buildRequest(10, null, null);
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+        when(userRepository.findById(1L)).thenReturn(Optional.of(passenger));
+        when(stopRepository.findById(1L)).thenReturn(Optional.empty());
+
+        // When/Then
+        assertThatThrownBy(() -> ticketService.purchaseTicket(request))
+                .isInstanceOf(ResourceNotFoundException.class)
+                .hasMessageContaining("Parada de origen");
+        verifyNoInteractions(ticketRepository);
+    }
+
+    @Test
+    void shouldPurchaseTicket_WithNonExistentToStop_ThrowResourceNotFound() {
+        // Given
+        TicketCreateRequest request = buildRequest(10, null, null);
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+        when(userRepository.findById(1L)).thenReturn(Optional.of(passenger));
+        when(stopRepository.findById(1L)).thenReturn(Optional.of(fromStop));
+        when(stopRepository.findById(2L)).thenReturn(Optional.empty());
+
+        // When/Then
+        assertThatThrownBy(() -> ticketService.purchaseTicket(request))
+                .isInstanceOf(ResourceNotFoundException.class)
+                .hasMessageContaining("Parada de destino");
+        verifyNoInteractions(ticketRepository);
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = Trip.TripStatus.class, names = {"BOARDING", "DEPARTED", "ARRIVED", "CANCELLED"})
+    void shouldPurchaseTicket_WithTripNotScheduled_ThrowInvalidSegment(Trip.TripStatus status) {
+        // Given
+        trip.setStatus(status);
+        TicketCreateRequest request = buildRequest(10, null, null);
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+
+        // When/Then
+        assertThatThrownBy(() -> ticketService.purchaseTicket(request))
+                .isInstanceOf(InvalidSegmentException.class)
+                .hasMessageContaining(status.name());
+        verifyNoInteractions(userRepository, ticketRepository);
+    }
+
+    // ==================== purchaseTicket: validación del tramo ====================
+
+    @Test
+    void shouldPurchaseTicket_WithFromStopFromAnotherRoute_ThrowInvalidSegment() {
+        // Given
+        fromStop.setRoute(Route.builder().id(99L).build());
+        TicketCreateRequest request = buildRequest(10, null, null);
+        stubEntitiesFound();
+
+        // When/Then
+        assertThatThrownBy(() -> ticketService.purchaseTicket(request))
+                .isInstanceOf(InvalidSegmentException.class)
+                .hasMessageContaining("no pertenecen a la ruta");
+        verifyNoInteractions(seatHoldRepository, ticketRepository);
+    }
+
+    @Test
+    void shouldPurchaseTicket_WithToStopFromAnotherRoute_ThrowInvalidSegment() {
+        // Given
+        toStop.setRoute(Route.builder().id(99L).build());
+        TicketCreateRequest request = buildRequest(10, null, null);
+        stubEntitiesFound();
+
+        // When/Then
+        assertThatThrownBy(() -> ticketService.purchaseTicket(request))
+                .isInstanceOf(InvalidSegmentException.class)
+                .hasMessageContaining("no pertenecen a la ruta");
+        verifyNoInteractions(seatHoldRepository, ticketRepository);
+    }
+
+    @ParameterizedTest
+    @CsvSource({"2, 2", "3, 1"})
+    void shouldPurchaseTicket_WithOriginNotBeforeDestination_ThrowInvalidSegment(int fromOrder, int toOrder) {
+        // Given: origen igual o posterior al destino
+        fromStop.setOrder(fromOrder);
+        toStop.setOrder(toOrder);
+        TicketCreateRequest request = buildRequest(10, null, null);
+        stubEntitiesFound();
+
+        // When/Then
+        assertThatThrownBy(() -> ticketService.purchaseTicket(request))
+                .isInstanceOf(InvalidSegmentException.class)
+                .hasMessageContaining("anterior a la de destino");
+        verifyNoInteractions(seatHoldRepository, ticketRepository);
+    }
+
+    // ==================== purchaseTicket: holds y disponibilidad ====================
+
+    @Test
+    void shouldPurchaseTicket_WithActiveHoldFromAnotherUser_ThrowSeatNotAvailable() {
+        // Given
+        TicketCreateRequest request = buildRequest(10, null, null);
+        SeatHold foreignHold = SeatHold.builder()
+                .id(5L)
+                .trip(trip)
+                .seatNumber(10)
+                .user(User.builder().id(2L).build())
+                .expiresAt(LocalDateTime.now().plusMinutes(5))
+                .build();
+        stubEntitiesFound();
+        when(seatHoldRepository.findActiveHold(eq(1L), eq(10), any(LocalDateTime.class)))
+                .thenReturn(Optional.of(foreignHold));
+
+        // When/Then
+        assertThatThrownBy(() -> ticketService.purchaseTicket(request))
+                .isInstanceOf(SeatNotAvailableException.class)
+                .hasMessageContaining("hold activo de otro usuario")
+                .satisfies(ex -> {
+                    BusinessException be = (BusinessException) ex;
+                    assertThat(be.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                    assertThat(be.getCode()).isEqualTo("SEAT_NOT_AVAILABLE");
+                });
+        verify(ticketRepository, never()).isSeatAvailableForSegment(anyLong(), anyInt(), anyInt(), anyInt());
+        verify(ticketRepository, never()).save(any());
+        verifyNoInteractions(seatHoldService);
+    }
+
+    @Test
+    void shouldPurchaseTicket_WithOwnActiveHold_ReleaseHoldAfterSale() {
+        // Given: el pasajero tiene un hold activo sobre el mismo asiento
+        TicketCreateRequest request = buildRequest(10, null, null);
+        SeatHold ownHold = SeatHold.builder()
+                .id(5L)
+                .trip(trip)
+                .seatNumber(10)
+                .user(passenger)
+                .expiresAt(LocalDateTime.now().plusMinutes(5))
+                .build();
+        stubEntitiesFound();
+        when(seatHoldRepository.findActiveHold(eq(1L), eq(10), any(LocalDateTime.class)))
+                .thenReturn(Optional.of(ownHold));
+        when(ticketRepository.isSeatAvailableForSegment(1L, 10, 1, 2)).thenReturn(true);
+        stubOverbookingCheck(20L, 0.05);
+        stubConfigBasePrice(BigDecimal.valueOf(50000));
+        stubTicketPersistence(request);
+
+        // When
+        TicketResponse result = ticketService.purchaseTicket(request);
+
+        // Then
+        assertThat(result).isEqualTo(ticketResponse);
+        verify(seatHoldService).releaseHold(5L);
+    }
+
+    @Test
+    void shouldPurchaseTicket_WithValidRequest_SetRelationsQrAndNotReleaseAnyHold() {
+        // Given
+        TicketCreateRequest request = buildRequest(10, null, null);
+        stubEntitiesFound();
+        stubSeatFree(10);
+        stubOverbookingCheck(20L, 0.05);
+        stubConfigBasePrice(BigDecimal.valueOf(50000));
+        stubTicketPersistence(request);
+
+        // When
+        ticketService.purchaseTicket(request);
+
+        // Then
+        ArgumentCaptor<Ticket> captor = ArgumentCaptor.forClass(Ticket.class);
+        verify(ticketRepository).save(captor.capture());
+        Ticket saved = captor.getValue();
+        assertThat(saved.getTrip()).isSameAs(trip);
+        assertThat(saved.getPassenger()).isSameAs(passenger);
+        assertThat(saved.getFromStop()).isSameAs(fromStop);
+        assertThat(saved.getToStop()).isSameAs(toStop);
+        assertThat(saved.getQrCode()).isEqualTo("QR123");
+        assertThat(saved.getPrice()).isEqualByComparingTo("50000");
+        assertThat(saved.getBaggage()).isNull();
+        verifyNoInteractions(seatHoldService, baggageRepository);
+    }
+
+    @Test
+    void shouldPurchaseTicket_CheckSegmentAvailabilityUsingStopOrdersNotIds() {
+        // Given: los IDs de las paradas no coinciden con su orden en la ruta
+        fromStop.setId(7L);
+        fromStop.setOrder(2);
+        toStop.setId(9L);
+        toStop.setOrder(5);
+        TicketCreateRequest request = buildRequest(10, null, null);
+        stubEntitiesFound();
+        when(seatHoldRepository.findActiveHold(eq(1L), eq(10), any(LocalDateTime.class)))
+                .thenReturn(Optional.empty());
+        when(ticketRepository.isSeatAvailableForSegment(1L, 10, 2, 5)).thenReturn(false);
+
+        // When/Then: la consulta se hace con el ORDEN (2, 5), no con los IDs (7, 9)
+        assertThatThrownBy(() -> ticketService.purchaseTicket(request))
+                .isInstanceOf(SeatNotAvailableException.class)
+                .hasMessageContaining("tramo seleccionado");
+        verify(ticketRepository).isSeatAvailableForSegment(1L, 10, 2, 5);
+        verify(ticketRepository, never()).isSeatAvailableForSegment(1L, 10, 7, 9);
+        verify(ticketRepository, never()).countSoldSeats(anyLong());
+    }
+
+    // ==================== purchaseTicket: overbooking y número de asiento ====================
+
+    @Test
+    void shouldPurchaseTicket_WithOverbookingLimitReached_ThrowBadRequestBeforeSeatValidation() {
+        // Given: 42/40 = 105% alcanza el límite de 5% y el asiento 999 tampoco existe
+        TicketCreateRequest request = buildRequest(999, null, null);
+        stubEntitiesFound();
+        stubSeatFree(999);
+        when(ticketRepository.countSoldSeats(1L)).thenReturn(42L);
+        when(configService.getOverbookingMaxPercentage()).thenReturn(0.05);
+
+        // When/Then: el overbooking se valida antes que el número de asiento
+        assertThatThrownBy(() -> ticketService.purchaseTicket(request))
+                .isInstanceOf(OverbookingNotAllowedException.class)
+                .satisfies(ex -> {
+                    BusinessException be = (BusinessException) ex;
+                    assertThat(be.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+                    assertThat(be.getCode()).isEqualTo("OVERBOOKING_NOT_ALLOWED");
+                });
+        verify(ticketRepository, never()).save(any());
+    }
+
+    @Test
+    void shouldPurchaseTicket_WithoutOverbookingAllowedAndBusFull_ThrowOverbooking() {
+        // Given: 0% de overbooking y 40/40 vendidos
+        TicketCreateRequest request = buildRequest(10, null, null);
+        stubEntitiesFound();
+        stubSeatFree(10);
+        when(ticketRepository.countSoldSeats(1L)).thenReturn(40L);
+        when(configService.getOverbookingMaxPercentage()).thenReturn(0.0);
+
+        // When/Then
+        assertThatThrownBy(() -> ticketService.purchaseTicket(request))
+                .isInstanceOf(OverbookingNotAllowedException.class);
+        verify(ticketRepository, never()).save(any());
+    }
+
+    @Test
+    void shouldPurchaseTicket_WithOccupancyBelowOverbookingLimit_AllowLastOverbookedSeat() {
+        // Given: 41/40 = 102.5% < 105% y el asiento 42 = 40 + floor(40 * 0.05)
+        TicketCreateRequest request = buildRequest(42, null, null);
+        stubEntitiesFound();
+        stubSeatFree(42);
+        stubOverbookingCheck(41L, 0.05);
+        when(configService.getTicketPriceMultiplierHighDemand()).thenReturn(BigDecimal.ONE);
+        stubConfigBasePrice(BigDecimal.valueOf(50000));
+        stubTicketPersistence(request);
+
+        // When
+        TicketResponse result = ticketService.purchaseTicket(request);
+
+        // Then
+        assertThat(result).isEqualTo(ticketResponse);
+        verify(ticketRepository).save(any(Ticket.class));
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {-1, 0, 43, 100})
+    void shouldPurchaseTicket_WithSeatNumberOutOfRange_ThrowSeatNotAvailable(int seatNumber) {
+        // Given: capacidad 40 y 5% de overbooking => asientos válidos 1..42
+        TicketCreateRequest request = buildRequest(seatNumber, null, null);
+        stubEntitiesFound();
+        stubSeatFree(seatNumber);
+        stubOverbookingCheck(20L, 0.05);
+
+        // When/Then
+        assertThatThrownBy(() -> ticketService.purchaseTicket(request))
+                .isInstanceOf(SeatNotAvailableException.class)
+                .hasMessageContaining("no existe en este bus");
+        verify(ticketRepository, never()).save(any());
+        verifyNoInteractions(fareRuleRepository);
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {1, 40, 41, 42})
+    void shouldPurchaseTicket_WithSeatNumberInsideRange_Succeed(int seatNumber) {
+        // Given
+        TicketCreateRequest request = buildRequest(seatNumber, null, null);
+        stubEntitiesFound();
+        stubSeatFree(seatNumber);
+        stubOverbookingCheck(20L, 0.05);
+        stubConfigBasePrice(BigDecimal.valueOf(50000));
+        stubTicketPersistence(request);
+
+        // When
+        TicketResponse result = ticketService.purchaseTicket(request);
+
+        // Then
+        assertThat(result).isNotNull();
+        verify(ticketRepository).save(any(Ticket.class));
+    }
+
+    @Test
+    void shouldPurchaseTicket_WithFloatingPointOverbookingMargin_AllowLastSeat() {
+        // Given: 100 * 0.29 = 28.999999999999996 en double; el máximo debe ser 129
+        bus.setCapacity(100);
+        TicketCreateRequest request = buildRequest(129, null, null);
+        stubEntitiesFound();
+        stubSeatFree(129);
+        stubOverbookingCheck(20L, 0.29);
+        stubConfigBasePrice(BigDecimal.valueOf(50000));
+        stubTicketPersistence(request);
+
+        // When
+        TicketResponse result = ticketService.purchaseTicket(request);
+
+        // Then
+        assertThat(result).isNotNull();
+    }
+
+    @Test
+    void shouldPurchaseTicket_WithSeatBeyondFloatingPointOverbookingMargin_ThrowSeatNotAvailable() {
+        // Given
+        bus.setCapacity(100);
+        TicketCreateRequest request = buildRequest(130, null, null);
+        stubEntitiesFound();
+        stubSeatFree(130);
+        stubOverbookingCheck(20L, 0.29);
+
+        // When/Then
+        assertThatThrownBy(() -> ticketService.purchaseTicket(request))
+                .isInstanceOf(SeatNotAvailableException.class)
+                .hasMessageContaining("capacidad: 100");
+    }
+
+    // ==================== purchaseTicket: cálculo de precio ====================
+
+    @Test
+    void shouldPurchaseTicket_WithFareRule_UseFareRuleBasePrice() {
+        // Given
+        TicketCreateRequest request = buildRequest(10, null, null);
+        FareRule fareRule = FareRule.builder()
+                .id(1L)
+                .route(route)
+                .fromStop(fromStop)
+                .toStop(toStop)
+                .basePrice(BigDecimal.valueOf(80000))
+                .build();
+        stubEntitiesFound();
+        stubSeatFree(10);
+        stubOverbookingCheck(20L, 0.05);
+        when(fareRuleRepository.findByRouteIdAndFromStopIdAndToStopId(1L, 1L, 2L))
+                .thenReturn(Optional.of(fareRule));
+        stubTicketPersistence(request);
+
+        // When
+        ticketService.purchaseTicket(request);
+
+        // Then
+        verify(ticketRepository).save(argThat(t -> t.getPrice().compareTo(BigDecimal.valueOf(80000)) == 0));
+    }
+
+    @Test
+    void shouldPurchaseTicket_WithHighDemand_ApplyHighDemandMultiplier() {
+        // Given: 33/40 = 82.5% > 80%
+        TicketCreateRequest request = buildRequest(10, null, null);
+        stubEntitiesFound();
+        stubSeatFree(10);
+        stubOverbookingCheck(33L, 0.05);
+        stubConfigBasePrice(BigDecimal.valueOf(50000));
+        when(configService.getTicketPriceMultiplierHighDemand()).thenReturn(BigDecimal.valueOf(1.2));
+        stubTicketPersistence(request);
+
+        // When
+        ticketService.purchaseTicket(request);
+
+        // Then
+        verify(ticketRepository).save(argThat(t -> t.getPrice().compareTo(BigDecimal.valueOf(60000)) == 0));
+        verify(configService, never()).getTicketPriceMultiplierMediumDemand();
+    }
+
+    @ParameterizedTest
+    @ValueSource(longs = {25L, 32L})
+    void shouldPurchaseTicket_WithMediumDemand_ApplyMediumDemandMultiplier(long soldSeats) {
+        // Given: 62.5% y exactamente 80% (el límite superior aún es demanda media)
+        TicketCreateRequest request = buildRequest(10, null, null);
+        stubEntitiesFound();
+        stubSeatFree(10);
+        stubOverbookingCheck(soldSeats, 0.05);
+        stubConfigBasePrice(BigDecimal.valueOf(50000));
+        when(configService.getTicketPriceMultiplierMediumDemand()).thenReturn(BigDecimal.valueOf(1.1));
+        stubTicketPersistence(request);
+
+        // When
+        ticketService.purchaseTicket(request);
+
+        // Then
+        verify(ticketRepository).save(argThat(t -> t.getPrice().compareTo(BigDecimal.valueOf(55000)) == 0));
+        verify(configService, never()).getTicketPriceMultiplierHighDemand();
+    }
+
+    @Test
+    void shouldPurchaseTicket_WithOccupancyExactlySixtyPercent_NotApplyDemandMultiplier() {
+        // Given: 24/40 = 60% no supera el umbral de demanda media
+        TicketCreateRequest request = buildRequest(10, null, null);
+        stubEntitiesFound();
+        stubSeatFree(10);
+        stubOverbookingCheck(24L, 0.05);
+        stubConfigBasePrice(BigDecimal.valueOf(50000));
+        stubTicketPersistence(request);
+
+        // When
+        ticketService.purchaseTicket(request);
+
+        // Then
+        verify(ticketRepository).save(argThat(t -> t.getPrice().compareTo(BigDecimal.valueOf(50000)) == 0));
+        verify(configService, never()).getTicketPriceMultiplierMediumDemand();
+        verify(configService, never()).getTicketPriceMultiplierHighDemand();
+        verify(configService, never()).getTicketPriceMultiplierPeakHours();
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+            "06:00, true", "09:59, true", "17:00, true", "20:59, true",
+            "05:59, false", "10:00, false", "16:59, false", "21:00, false"
+    })
+    void shouldPurchaseTicket_DependingOnDepartureHour_ApplyPeakHoursMultiplier(LocalTime departure, boolean peak) {
+        // Given: horas pico 6-9 y 17-20
+        trip.setDepartureTime(LocalDate.now().plusDays(1).atTime(departure));
+        TicketCreateRequest request = buildRequest(10, null, null);
+        stubEntitiesFound();
+        stubSeatFree(10);
+        stubOverbookingCheck(20L, 0.05);
+        stubConfigBasePrice(BigDecimal.valueOf(50000));
+        if (peak) {
+            when(configService.getTicketPriceMultiplierPeakHours()).thenReturn(BigDecimal.valueOf(1.15));
+        }
+        stubTicketPersistence(request);
+
+        // When
+        ticketService.purchaseTicket(request);
+
+        // Then
+        BigDecimal expected = peak ? BigDecimal.valueOf(57500) : BigDecimal.valueOf(50000);
+        verify(ticketRepository).save(argThat(t -> t.getPrice().compareTo(expected) == 0));
+        if (!peak) {
+            verify(configService, never()).getTicketPriceMultiplierPeakHours();
+        }
+    }
+
+    @Test
+    void shouldPurchaseTicket_WithHighDemandPeakHourAndStudent_CombineMultipliersAndDiscount() {
+        // Given: 50000 * 1.2 * 1.15 = 69000, con 20% de descuento = 55200
+        trip.setDepartureTime(LocalDate.now().plusDays(1).atTime(18, 30));
+        TicketCreateRequest request = buildRequest(10, "STUDENT", null);
+        stubEntitiesFound();
+        stubSeatFree(10);
+        stubOverbookingCheck(35L, 0.05);
+        stubConfigBasePrice(BigDecimal.valueOf(50000));
+        when(configService.getTicketPriceMultiplierHighDemand()).thenReturn(BigDecimal.valueOf(1.2));
+        when(configService.getTicketPriceMultiplierPeakHours()).thenReturn(BigDecimal.valueOf(1.15));
+        when(configService.getConfig()).thenReturn(createConfigResponse(Map.of("STUDENT", 20)));
+        stubTicketPersistence(request);
+
+        // When
+        ticketService.purchaseTicket(request);
+
+        // Then
+        verify(ticketRepository).save(argThat(t -> t.getPrice().compareTo(new BigDecimal("55200.00")) == 0));
+    }
+
+    @ParameterizedTest
+    @NullAndEmptySource
+    void shouldPurchaseTicket_WithoutPassengerType_NotApplyDiscount(String passengerType) {
+        // Given
+        TicketCreateRequest request = buildRequest(10, passengerType, null);
+        stubEntitiesFound();
+        stubSeatFree(10);
+        stubOverbookingCheck(20L, 0.05);
+        stubConfigBasePrice(BigDecimal.valueOf(50000));
+        stubTicketPersistence(request);
+
+        // When
+        ticketService.purchaseTicket(request);
+
+        // Then: no se consulta la configuración de descuentos
+        verify(ticketRepository).save(argThat(t -> t.getPrice().compareTo(BigDecimal.valueOf(50000)) == 0));
+        verify(configService, never()).getConfig();
+    }
+
+    @Test
+    void shouldPurchaseTicket_WithLowercasePassengerType_ApplyDiscountCaseInsensitive() {
+        // Given
+        TicketCreateRequest request = buildRequest(10, "student", null);
+        stubEntitiesFound();
+        stubSeatFree(10);
+        stubOverbookingCheck(20L, 0.05);
+        stubConfigBasePrice(BigDecimal.valueOf(50000));
+        when(configService.getConfig()).thenReturn(createConfigResponse(Map.of("STUDENT", 20)));
+        stubTicketPersistence(request);
+
+        // When
+        ticketService.purchaseTicket(request);
+
+        // Then
+        verify(ticketRepository).save(argThat(t -> t.getPrice().compareTo(BigDecimal.valueOf(40000)) == 0));
+    }
+
+    @Test
+    void shouldPurchaseTicket_WithUnknownPassengerType_NotApplyDiscount() {
+        // Given
+        TicketCreateRequest request = buildRequest(10, "VIP", null);
+        stubEntitiesFound();
+        stubSeatFree(10);
+        stubOverbookingCheck(20L, 0.05);
+        stubConfigBasePrice(BigDecimal.valueOf(50000));
+        when(configService.getConfig()).thenReturn(createConfigResponse(Map.of("STUDENT", 20)));
+        stubTicketPersistence(request);
+
+        // When
+        ticketService.purchaseTicket(request);
+
+        // Then
+        verify(ticketRepository).save(argThat(t -> t.getPrice().compareTo(BigDecimal.valueOf(50000)) == 0));
+    }
+
+    @Test
+    void shouldPurchaseTicket_WithDiscountRequiringRounding_RoundHalfUpToTwoDecimals() {
+        // Given: 33333.33 * 15% = 4999.9995 -> 5000.00; precio final 28333.33
+        TicketCreateRequest request = buildRequest(10, "SENIOR", null);
+        stubEntitiesFound();
+        stubSeatFree(10);
+        stubOverbookingCheck(20L, 0.05);
+        stubConfigBasePrice(new BigDecimal("33333.33"));
+        when(configService.getConfig()).thenReturn(createConfigResponse(Map.of("SENIOR", 15)));
+        stubTicketPersistence(request);
+
+        // When
+        ticketService.purchaseTicket(request);
+
+        // Then
+        ArgumentCaptor<Ticket> captor = ArgumentCaptor.forClass(Ticket.class);
+        verify(ticketRepository).save(captor.capture());
+        assertThat(captor.getValue().getPrice()).isEqualByComparingTo("28333.33");
+        assertThat(captor.getValue().getPrice().scale()).isEqualTo(2);
+    }
+
+    // ==================== purchaseTicket: equipaje ====================
+
+    @Test
+    void shouldPurchaseTicket_WithBaggageUnderLimit_RegisterBaggageWithoutExcessFee() {
+        // Given
+        TicketCreateRequest request = buildRequest(10, null,
+                new BaggageCreateRequest(BigDecimal.valueOf(20), null));
+        stubEntitiesFound();
+        stubSeatFree(10);
+        stubOverbookingCheck(20L, 0.05);
+        stubConfigBasePrice(BigDecimal.valueOf(50000));
+        stubTicketPersistence(request);
+        when(qrCodeGenerator.generateBaggageTag()).thenReturn("BAG-001");
+        when(configService.getBaggageWeightLimit()).thenReturn(23.0);
+        when(baggageRepository.save(any(Baggage.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        // When
+        ticketService.purchaseTicket(request);
+
+        // Then
+        ArgumentCaptor<Baggage> captor = ArgumentCaptor.forClass(Baggage.class);
+        verify(baggageRepository).save(captor.capture());
+        Baggage saved = captor.getValue();
+        assertThat(saved.getTicket()).isSameAs(ticket);
+        assertThat(saved.getTagCode()).isEqualTo("BAG-001");
+        assertThat(saved.getWeightKg()).isEqualByComparingTo("20");
+        assertThat(saved.getExcessFee()).isEqualByComparingTo(BigDecimal.ZERO);
+        assertThat(ticket.getBaggage()).isSameAs(saved);
+        verify(configService, never()).getExcessFeePerKg();
+    }
+
+    @Test
+    void shouldPurchaseTicket_WithBaggageExactlyAtLimit_NotChargeExcess() {
+        // Given
+        TicketCreateRequest request = buildRequest(10, null,
+                new BaggageCreateRequest(BigDecimal.valueOf(23), null));
+        stubEntitiesFound();
+        stubSeatFree(10);
+        stubOverbookingCheck(20L, 0.05);
+        stubConfigBasePrice(BigDecimal.valueOf(50000));
+        stubTicketPersistence(request);
+        when(qrCodeGenerator.generateBaggageTag()).thenReturn("BAG-002");
+        when(configService.getBaggageWeightLimit()).thenReturn(23.0);
+        when(baggageRepository.save(any(Baggage.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        // When
+        ticketService.purchaseTicket(request);
+
+        // Then
+        verify(baggageRepository).save(argThat(b -> b.getExcessFee().compareTo(BigDecimal.ZERO) == 0));
+        verify(configService, never()).getExcessFeePerKg();
+    }
+
+    @ParameterizedTest
+    @CsvSource({"30, 35000.00", "25.5, 12500.00", "23.01, 50.00"})
+    void shouldPurchaseTicket_WithBaggageOverLimit_ChargeExcessPerKg(BigDecimal weightKg, BigDecimal expectedFee) {
+        // Given: límite 23 kg y 5000 por kg de exceso
+        TicketCreateRequest request = buildRequest(10, null, new BaggageCreateRequest(weightKg, null));
+        stubEntitiesFound();
+        stubSeatFree(10);
+        stubOverbookingCheck(20L, 0.05);
+        stubConfigBasePrice(BigDecimal.valueOf(50000));
+        stubTicketPersistence(request);
+        when(qrCodeGenerator.generateBaggageTag()).thenReturn("BAG-003");
+        when(configService.getBaggageWeightLimit()).thenReturn(23.0);
+        when(configService.getExcessFeePerKg()).thenReturn(BigDecimal.valueOf(5000));
+        when(baggageRepository.save(any(Baggage.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        // When
+        ticketService.purchaseTicket(request);
+
+        // Then
+        ArgumentCaptor<Baggage> captor = ArgumentCaptor.forClass(Baggage.class);
+        verify(baggageRepository).save(captor.capture());
+        assertThat(captor.getValue().getExcessFee()).isEqualByComparingTo(expectedFee);
+        assertThat(captor.getValue().getExcessFee().scale()).isEqualTo(2);
+    }
+
+    // ==================== cancelTicket ====================
+
+    @ParameterizedTest
+    @EnumSource(value = Ticket.TicketStatus.class, names = {"CANCELLED", "NO_SHOW"})
+    void shouldCancelTicket_WithTicketNotSold_ThrowInvalidSegment(Ticket.TicketStatus status) {
+        // Given
+        ticket.setStatus(status);
+        when(ticketRepository.findById(1L)).thenReturn(Optional.of(ticket));
+
+        // When/Then
+        assertThatThrownBy(() -> ticketService.cancelTicket(1L))
+                .isInstanceOf(InvalidSegmentException.class)
+                .hasMessageContaining("ya está cancelado");
+        verify(ticketRepository, never()).save(any());
+    }
+
+    @Test
+    void shouldCancelTicket_WithDepartureTimeInThePast_ThrowTripAlreadyDeparted() {
+        // Given: el viaje sigue SCHEDULED pero la hora de salida ya pasó
+        trip.setDepartureTime(LocalDateTime.now().minusHours(1));
+        when(ticketRepository.findById(1L)).thenReturn(Optional.of(ticket));
+
+        // When/Then
+        assertThatThrownBy(() -> ticketService.cancelTicket(1L))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    BusinessException be = (BusinessException) ex;
+                    assertThat(be.getCode()).isEqualTo("TRIP_ALREADY_DEPARTED");
+                    assertThat(be.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+                });
+        verify(ticketRepository, never()).save(any());
+        assertThat(ticket.getStatus()).isEqualTo(Ticket.TicketStatus.SOLD);
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = Trip.TripStatus.class, names = {"DEPARTED", "ARRIVED"})
+    void shouldCancelTicket_WithTripAlreadyDepartedStatus_ThrowTripAlreadyDeparted(Trip.TripStatus status) {
+        // Given: la hora de salida es futura pero el viaje ya figura como salido/llegado
+        trip.setDepartureTime(LocalDateTime.now().plusHours(5));
+        trip.setStatus(status);
+        when(ticketRepository.findById(1L)).thenReturn(Optional.of(ticket));
+
+        // When/Then
+        assertThatThrownBy(() -> ticketService.cancelTicket(1L))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getCode()).isEqualTo("TRIP_ALREADY_DEPARTED"));
+        verify(ticketRepository, never()).save(any());
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+            // minutos hasta la salida, tramo de política aplicado, porcentaje
+            "2910, 48, 90",
+            "2850, 24, 70",
+            "1470, 24, 70",
+            "1410, 12, 50",
+            "750, 12, 50",
+            "690, 6, 30",
+            "390, 6, 30",
+            "330, 0, 10",
+            "30, 0, 10"
+    })
+    void shouldCancelTicket_DependingOnHoursUntilDeparture_ApplyRefundPolicy(long minutesUntilDeparture,
+                                                                          int policy, int percentage) {
+        // Given: margen de 30 minutos respecto a cada límite para no depender del instante de ejecución
+        trip.setDepartureTime(LocalDateTime.now().plusMinutes(minutesUntilDeparture));
+        when(ticketRepository.findById(1L)).thenReturn(Optional.of(ticket));
+        BigDecimal pct = BigDecimal.valueOf(percentage);
+        switch (policy) {
+            case 48 -> when(configService.getRefundPercentage48Hours()).thenReturn(pct);
+            case 24 -> when(configService.getRefundPercentage24Hours()).thenReturn(pct);
+            case 12 -> when(configService.getRefundPercentage12Hours()).thenReturn(pct);
+            case 6 -> when(configService.getRefundPercentage6Hours()).thenReturn(pct);
+            default -> when(configService.getRefundPercentageLess6Hours()).thenReturn(pct);
+        }
+        when(ticketRepository.save(any(Ticket.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        // When
+        TicketCancelResponse result = ticketService.cancelTicket(1L);
+
+        // Then: precio 50000
+        assertThat(result.refundPercentage()).isEqualTo(percentage);
+        assertThat(result.refundAmount())
+                .isEqualByComparingTo(BigDecimal.valueOf(50000L * percentage / 100));
+        assertThat(result.status()).isEqualTo(Ticket.TicketStatus.CANCELLED);
+        assertThat(result.message()).contains("cancelado");
+    }
+
+    @Test
+    void shouldCancelTicket_WithRefundRequiringRounding_RoundHalfUpToTwoDecimals() {
+        // Given: 33333.33 * 70% = 23333.331 -> 23333.33
+        ticket.setPrice(new BigDecimal("33333.33"));
+        trip.setDepartureTime(LocalDateTime.now().plusHours(30));
+        when(ticketRepository.findById(1L)).thenReturn(Optional.of(ticket));
+        when(configService.getRefundPercentage24Hours()).thenReturn(BigDecimal.valueOf(70));
+        when(ticketRepository.save(any(Ticket.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        // When
+        TicketCancelResponse result = ticketService.cancelTicket(1L);
+
+        // Then
+        assertThat(result.refundAmount()).isEqualByComparingTo("23333.33");
+        assertThat(result.refundAmount().scale()).isEqualTo(2);
+    }
+
+    @Test
+    void shouldCancelTicket_WithTripBoardingAndFutureDeparture_AllowCancellation() {
+        // Given
+        trip.setStatus(Trip.TripStatus.BOARDING);
+        trip.setDepartureTime(LocalDateTime.now().plusHours(2));
+        when(ticketRepository.findById(1L)).thenReturn(Optional.of(ticket));
+        when(configService.getRefundPercentageLess6Hours()).thenReturn(BigDecimal.ZERO);
+        when(ticketRepository.save(any(Ticket.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        // When
+        TicketCancelResponse result = ticketService.cancelTicket(1L);
+
+        // Then
+        assertThat(result.status()).isEqualTo(Ticket.TicketStatus.CANCELLED);
+        assertThat(result.refundAmount()).isEqualByComparingTo(BigDecimal.ZERO);
+        assertThat(result.refundPercentage()).isZero();
+    }
+
+    // ==================== consultas ====================
+
+    @Test
+    void shouldGetTicketById_WithNonExistentId_ThrowResourceNotFound() {
+        // Given
+        when(ticketRepository.findById(99L)).thenReturn(Optional.empty());
+
+        // When/Then
+        assertThatThrownBy(() -> ticketService.getTicketById(99L))
+                .isInstanceOf(ResourceNotFoundException.class)
+                .hasMessageContaining("99");
+        verifyNoInteractions(ticketMapper);
+    }
+
+    @Test
+    void shouldGetTicketByQrCode_WithExistingCode_ReturnTicketResponse() {
+        // Given
+        when(ticketRepository.findByQrCode("QR123")).thenReturn(Optional.of(ticket));
+        when(ticketMapper.toResponse(ticket)).thenReturn(ticketResponse);
+
+        // When
+        TicketResponse result = ticketService.getTicketByQrCode("QR123");
+
+        // Then
+        assertThat(result).isEqualTo(ticketResponse);
+    }
+
+    @Test
+    void shouldGetTicketByQrCode_WithUnknownCode_ThrowResourceNotFound() {
+        // Given
+        when(ticketRepository.findByQrCode("QR-NO")).thenReturn(Optional.empty());
+
+        // When/Then
+        assertThatThrownBy(() -> ticketService.getTicketByQrCode("QR-NO"))
+                .isInstanceOf(ResourceNotFoundException.class)
+                .hasMessageContaining("QR-NO");
+        verifyNoInteractions(ticketMapper);
+    }
+
+    @Test
+    void shouldGetUserTickets_WithoutTickets_ReturnEmptyList() {
+        // Given
+        when(ticketRepository.findByPassengerId(2L)).thenReturn(List.of());
+        when(ticketMapper.toResponseList(List.of())).thenReturn(List.of());
+
+        // When
+        List<TicketResponse> result = ticketService.getUserTickets(2L);
+
+        // Then
+        assertThat(result).isEmpty();
+    }
+
+    // ==================== helpers ====================
+
+    private TicketCreateRequest buildRequest(Integer seatNumber, String passengerType, BaggageCreateRequest baggage) {
+        return new TicketCreateRequest(
+                1L, 1L, seatNumber,
+                fromStop.getId(), fromStop.getName(), fromStop.getOrder(),
+                toStop.getId(), toStop.getName(), toStop.getOrder(),
+                BigDecimal.valueOf(50000), Ticket.PaymentMethod.CASH, baggage, passengerType
+        );
+    }
+
+    private void stubEntitiesFound() {
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+        when(userRepository.findById(1L)).thenReturn(Optional.of(passenger));
+        when(stopRepository.findById(fromStop.getId())).thenReturn(Optional.of(fromStop));
+        when(stopRepository.findById(toStop.getId())).thenReturn(Optional.of(toStop));
+    }
+
+    private void stubSeatFree(int seatNumber) {
+        when(seatHoldRepository.findActiveHold(eq(1L), eq(seatNumber), any(LocalDateTime.class)))
+                .thenReturn(Optional.empty());
+        when(ticketRepository.isSeatAvailableForSegment(1L, seatNumber, fromStop.getOrder(), toStop.getOrder()))
+                .thenReturn(true);
+    }
+
+    private void stubOverbookingCheck(long soldSeats, double overbookingMaxPercentage) {
+        when(ticketRepository.countSoldSeats(1L)).thenReturn(soldSeats);
+        when(configService.getOverbookingMaxPercentage()).thenReturn(overbookingMaxPercentage);
+    }
+
+    private void stubConfigBasePrice(BigDecimal basePrice) {
+        when(fareRuleRepository.findByRouteIdAndFromStopIdAndToStopId(1L, fromStop.getId(), toStop.getId()))
+                .thenReturn(Optional.empty());
+        when(configService.getTicketBasePrice()).thenReturn(basePrice);
+    }
+
+    private void stubTicketPersistence(TicketCreateRequest request) {
+        when(ticketMapper.toEntity(request)).thenReturn(ticket);
+        when(qrCodeGenerator.generateTicketQr()).thenReturn("QR123");
+        when(ticketRepository.save(any(Ticket.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(ticketMapper.toResponse(any(Ticket.class))).thenReturn(ticketResponse);
     }
 
     private com.web.dto.admin.ConfigResponse createConfigResponse(Map<String, Integer> discounts) {
