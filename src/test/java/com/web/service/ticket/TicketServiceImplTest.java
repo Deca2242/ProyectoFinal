@@ -92,7 +92,7 @@ class TicketServiceImplTest {
                 .route(route)
                 .bus(bus)
                 .tripDate(LocalDate.now().plusDays(1))
-                .departureTime(LocalDateTime.now().plusDays(1).plusHours(8))
+                .departureTime(LocalDate.now().plusDays(1).atTime(12, 0))
                 .status(Trip.TripStatus.SCHEDULED)
                 .build();
 
@@ -147,21 +147,20 @@ class TicketServiceImplTest {
                 BigDecimal.valueOf(50000), Ticket.PaymentMethod.CASH, null, "ADULT"
         );
 
+        when(configService.getConfig()).thenReturn(createConfigResponse(new HashMap<>()));
         when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
         when(userRepository.findById(1L)).thenReturn(Optional.of(passenger));
         when(stopRepository.findById(1L)).thenReturn(Optional.of(fromStop));
         when(stopRepository.findById(2L)).thenReturn(Optional.of(toStop));
-        when(seatHoldRepository.findActiveHold(1L, 10, any(LocalDateTime.class)))
+        when(seatHoldRepository.findActiveHold(eq(1L), eq(10), any(LocalDateTime.class)))
                 .thenReturn(Optional.empty());
         when(ticketRepository.isSeatAvailableForSegment(1L, 10, 1, 2)).thenReturn(true);
         when(fareRuleRepository.findByRouteIdAndFromStopIdAndToStopId(1L, 1L, 2L))
                 .thenReturn(Optional.empty());
         when(configService.getTicketBasePrice()).thenReturn(BigDecimal.valueOf(50000));
-        when(configService.getTicketPriceMultiplierHighDemand()).thenReturn(BigDecimal.ONE);
-        when(configService.getTicketPriceMultiplierMediumDemand()).thenReturn(BigDecimal.ONE);
-        when(configService.getTicketPriceMultiplierPeakHours()).thenReturn(BigDecimal.ONE);
-        when(ticketRepository.countSoldTicketsInRange(any(LocalDate.class), any(LocalDate.class)))
-                .thenReturn(10L);
+        lenient().when(configService.getTicketPriceMultiplierHighDemand()).thenReturn(BigDecimal.ONE);
+        lenient().when(configService.getTicketPriceMultiplierMediumDemand()).thenReturn(BigDecimal.ONE);
+        lenient().when(configService.getTicketPriceMultiplierPeakHours()).thenReturn(BigDecimal.ONE);
         when(ticketRepository.countSoldSeats(1L)).thenReturn(20L);
         when(configService.getOverbookingMaxPercentage()).thenReturn(0.05);
         when(ticketMapper.toEntity(request)).thenReturn(ticket);
@@ -199,17 +198,15 @@ class TicketServiceImplTest {
         when(userRepository.findById(1L)).thenReturn(Optional.of(passenger));
         when(stopRepository.findById(1L)).thenReturn(Optional.of(fromStop));
         when(stopRepository.findById(2L)).thenReturn(Optional.of(toStop));
-        when(seatHoldRepository.findActiveHold(1L, 10, any(LocalDateTime.class)))
+        when(seatHoldRepository.findActiveHold(eq(1L), eq(10), any(LocalDateTime.class)))
                 .thenReturn(Optional.empty());
         when(ticketRepository.isSeatAvailableForSegment(1L, 10, 1, 2)).thenReturn(true);
         when(fareRuleRepository.findByRouteIdAndFromStopIdAndToStopId(1L, 1L, 2L))
                 .thenReturn(Optional.empty());
         when(configService.getTicketBasePrice()).thenReturn(BigDecimal.valueOf(50000));
-        when(configService.getTicketPriceMultiplierHighDemand()).thenReturn(BigDecimal.ONE);
-        when(configService.getTicketPriceMultiplierMediumDemand()).thenReturn(BigDecimal.ONE);
-        when(configService.getTicketPriceMultiplierPeakHours()).thenReturn(BigDecimal.ONE);
-        when(ticketRepository.countSoldTicketsInRange(any(LocalDate.class), any(LocalDate.class)))
-                .thenReturn(10L);
+        lenient().when(configService.getTicketPriceMultiplierHighDemand()).thenReturn(BigDecimal.ONE);
+        lenient().when(configService.getTicketPriceMultiplierMediumDemand()).thenReturn(BigDecimal.ONE);
+        lenient().when(configService.getTicketPriceMultiplierPeakHours()).thenReturn(BigDecimal.ONE);
         when(ticketRepository.countSoldSeats(1L)).thenReturn(20L);
         when(configService.getOverbookingMaxPercentage()).thenReturn(0.05);
         when(configService.getConfig()).thenReturn(createConfigResponse(discounts));
@@ -248,17 +245,15 @@ class TicketServiceImplTest {
         when(userRepository.findById(1L)).thenReturn(Optional.of(passenger));
         when(stopRepository.findById(1L)).thenReturn(Optional.of(fromStop));
         when(stopRepository.findById(2L)).thenReturn(Optional.of(toStop));
-        when(seatHoldRepository.findActiveHold(1L, 10, any(LocalDateTime.class)))
+        when(seatHoldRepository.findActiveHold(eq(1L), eq(10), any(LocalDateTime.class)))
                 .thenReturn(Optional.empty());
         when(ticketRepository.isSeatAvailableForSegment(1L, 10, 1, 2)).thenReturn(true);
         when(fareRuleRepository.findByRouteIdAndFromStopIdAndToStopId(1L, 1L, 2L))
                 .thenReturn(Optional.empty());
         when(configService.getTicketBasePrice()).thenReturn(BigDecimal.valueOf(50000));
-        when(configService.getTicketPriceMultiplierHighDemand()).thenReturn(BigDecimal.ONE);
-        when(configService.getTicketPriceMultiplierMediumDemand()).thenReturn(BigDecimal.ONE);
-        when(configService.getTicketPriceMultiplierPeakHours()).thenReturn(BigDecimal.ONE);
-        when(ticketRepository.countSoldTicketsInRange(any(LocalDate.class), any(LocalDate.class)))
-                .thenReturn(10L);
+        lenient().when(configService.getTicketPriceMultiplierHighDemand()).thenReturn(BigDecimal.ONE);
+        lenient().when(configService.getTicketPriceMultiplierMediumDemand()).thenReturn(BigDecimal.ONE);
+        lenient().when(configService.getTicketPriceMultiplierPeakHours()).thenReturn(BigDecimal.ONE);
         when(ticketRepository.countSoldSeats(1L)).thenReturn(20L);
         when(configService.getOverbookingMaxPercentage()).thenReturn(0.05);
         when(configService.getConfig()).thenReturn(createConfigResponse(discounts));
@@ -297,17 +292,15 @@ class TicketServiceImplTest {
         when(userRepository.findById(1L)).thenReturn(Optional.of(passenger));
         when(stopRepository.findById(1L)).thenReturn(Optional.of(fromStop));
         when(stopRepository.findById(2L)).thenReturn(Optional.of(toStop));
-        when(seatHoldRepository.findActiveHold(1L, 10, any(LocalDateTime.class)))
+        when(seatHoldRepository.findActiveHold(eq(1L), eq(10), any(LocalDateTime.class)))
                 .thenReturn(Optional.empty());
         when(ticketRepository.isSeatAvailableForSegment(1L, 10, 1, 2)).thenReturn(true);
         when(fareRuleRepository.findByRouteIdAndFromStopIdAndToStopId(1L, 1L, 2L))
                 .thenReturn(Optional.empty());
         when(configService.getTicketBasePrice()).thenReturn(BigDecimal.valueOf(50000));
-        when(configService.getTicketPriceMultiplierHighDemand()).thenReturn(BigDecimal.ONE);
-        when(configService.getTicketPriceMultiplierMediumDemand()).thenReturn(BigDecimal.ONE);
-        when(configService.getTicketPriceMultiplierPeakHours()).thenReturn(BigDecimal.ONE);
-        when(ticketRepository.countSoldTicketsInRange(any(LocalDate.class), any(LocalDate.class)))
-                .thenReturn(10L);
+        lenient().when(configService.getTicketPriceMultiplierHighDemand()).thenReturn(BigDecimal.ONE);
+        lenient().when(configService.getTicketPriceMultiplierMediumDemand()).thenReturn(BigDecimal.ONE);
+        lenient().when(configService.getTicketPriceMultiplierPeakHours()).thenReturn(BigDecimal.ONE);
         when(ticketRepository.countSoldSeats(1L)).thenReturn(20L);
         when(configService.getOverbookingMaxPercentage()).thenReturn(0.05);
         when(configService.getConfig()).thenReturn(createConfigResponse(discounts));
@@ -343,7 +336,7 @@ class TicketServiceImplTest {
         when(userRepository.findById(1L)).thenReturn(Optional.of(passenger));
         when(stopRepository.findById(1L)).thenReturn(Optional.of(fromStop));
         when(stopRepository.findById(2L)).thenReturn(Optional.of(toStop));
-        when(seatHoldRepository.findActiveHold(1L, 10, any(LocalDateTime.class)))
+        when(seatHoldRepository.findActiveHold(eq(1L), eq(10), any(LocalDateTime.class)))
                 .thenReturn(Optional.empty());
         when(ticketRepository.isSeatAvailableForSegment(1L, 10, 1, 2)).thenReturn(true);
         when(ticketRepository.countSoldSeats(1L)).thenReturn(42L); // 42/40 = 105% occupancy
@@ -367,7 +360,7 @@ class TicketServiceImplTest {
         when(userRepository.findById(1L)).thenReturn(Optional.of(passenger));
         when(stopRepository.findById(1L)).thenReturn(Optional.of(fromStop));
         when(stopRepository.findById(2L)).thenReturn(Optional.of(toStop));
-        when(seatHoldRepository.findActiveHold(1L, 10, any(LocalDateTime.class)))
+        when(seatHoldRepository.findActiveHold(eq(1L), eq(10), any(LocalDateTime.class)))
                 .thenReturn(Optional.empty());
         when(ticketRepository.isSeatAvailableForSegment(1L, 10, 1, 2)).thenReturn(false);
 

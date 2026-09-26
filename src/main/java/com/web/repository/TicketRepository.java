@@ -131,6 +131,19 @@ public interface TicketRepository extends JpaRepository<Ticket, Long> {
             @Param("startTime") LocalDateTime startTime,
             @Param("endTime") LocalDateTime endTime);
 
+    // Tickets vendidos en efectivo dentro de un rango de fecha de compra (para cierre de caja)
+    @Query("""
+                SELECT t FROM Ticket t
+                WHERE t.paymentMethod = 'CASH'
+                AND t.status = 'SOLD'
+                AND t.purchasedAt >= :start
+                AND t.purchasedAt < :end
+                ORDER BY t.purchasedAt
+            """)
+    List<Ticket> findSoldCashTicketsPurchasedBetween(
+            @Param("start") LocalDateTime start,
+            @Param("end") LocalDateTime end);
+
     // Métricas: Calcular ingresos por rango de fechas
     @Query("""
                 SELECT SUM(t.price)

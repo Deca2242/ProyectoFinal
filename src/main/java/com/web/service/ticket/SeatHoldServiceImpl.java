@@ -62,6 +62,11 @@ public class SeatHoldServiceImpl implements SeatHoldService {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Usuario", userId));
 
+        if (trip.getStatus() != Trip.TripStatus.SCHEDULED) {
+            throw new SeatNotAvailableException(
+                    "El viaje no admite reservas (estado: " + trip.getStatus() + ")");
+        }
+
         if (trip.getDepartureTime().isBefore(now)) {
             throw new SeatNotAvailableException("El viaje ya ha salido");
         }

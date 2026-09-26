@@ -109,15 +109,19 @@ class PaymentServiceImplTest {
         List<Ticket> cashTickets = List.of(ticket);
 
         when(userRepository.findById(1L)).thenReturn(Optional.of(user));
-        when(ticketRepository.findAll()).thenReturn(cashTickets);
+        when(ticketRepository.findSoldCashTicketsPurchasedBetween(
+                LocalDate.now().atStartOfDay(), LocalDate.now().plusDays(1).atStartOfDay()))
+                .thenReturn(cashTickets);
 
         // When
         CashCloseResponse result = paymentService.closeCash(request, 1L);
 
-        // Then
+        // Then: el esperado lo calcula el sistema (1 ticket de 50000) y se compara con lo reportado
         assertThat(result).isNotNull();
         assertThat(result.id()).isEqualTo(1L);
         assertThat(result.ticketCount()).isEqualTo(1);
+        assertThat(result.expectedAmount()).isEqualByComparingTo("50000");
+        assertThat(result.difference()).isEqualByComparingTo("50000");
         verify(userRepository).findById(1L);
     }
 

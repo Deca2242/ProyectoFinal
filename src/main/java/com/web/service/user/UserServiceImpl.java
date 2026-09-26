@@ -8,6 +8,7 @@ import com.web.exception.ResourceNotFoundException;
 import com.web.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -20,6 +21,7 @@ public class UserServiceImpl implements UserService {
 
     private final UserRepository userRepository;
     private final UserMapper userMapper;
+    private final PasswordEncoder passwordEncoder;
 
     // Obtiene lista de todos los usuarios
     @Override
@@ -55,6 +57,11 @@ public class UserServiceImpl implements UserService {
                 .orElseThrow(() -> new ResourceNotFoundException("Usuario", id));
 
         userMapper.updateEntityFromRequest(request, user);
+
+        // El mapper no toca el hash: la nueva contraseña (opcional) se cifra aquí
+        if (request.password() != null && !request.password().isBlank()) {
+            user.setPasswordHash(passwordEncoder.encode(request.password()));
+        }
 
         User updatedUser = userRepository.save(user);
 

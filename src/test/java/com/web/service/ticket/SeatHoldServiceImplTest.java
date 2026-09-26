@@ -98,7 +98,7 @@ class SeatHoldServiceImplTest {
 
         when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
         when(userRepository.findById(1L)).thenReturn(Optional.of(user));
-        when(seatHoldRepository.findActiveHold(1L, 10, any(LocalDateTime.class)))
+        when(seatHoldRepository.findActiveHold(eq(1L), eq(10), any(LocalDateTime.class)))
                 .thenReturn(Optional.empty());
         when(ticketRepository.isSeatAvailableForFullTrip(1L, 10)).thenReturn(true);
         when(configService.getHoldDurationMinutes()).thenReturn(10);
@@ -129,7 +129,7 @@ class SeatHoldServiceImplTest {
 
         when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
         when(userRepository.findById(1L)).thenReturn(Optional.of(user));
-        when(seatHoldRepository.findActiveHold(1L, 10, any(LocalDateTime.class)))
+        when(seatHoldRepository.findActiveHold(eq(1L), eq(10), any(LocalDateTime.class)))
                 .thenReturn(Optional.empty());
         when(ticketRepository.isSeatAvailableForFullTrip(1L, 10)).thenReturn(true);
         when(configService.getHoldDurationMinutes()).thenReturn(10);
@@ -164,7 +164,7 @@ class SeatHoldServiceImplTest {
 
         when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
         when(userRepository.findById(1L)).thenReturn(Optional.of(user));
-        when(seatHoldRepository.findActiveHold(1L, 10, any(LocalDateTime.class)))
+        when(seatHoldRepository.findActiveHold(eq(1L), eq(10), any(LocalDateTime.class)))
                 .thenReturn(Optional.of(existingHold));
 
         // When/Then
@@ -176,7 +176,7 @@ class SeatHoldServiceImplTest {
     @Test
     void shouldHasActiveHold_WithActiveHold_ReturnTrue() {
         // Given
-        when(seatHoldRepository.findActiveHold(1L, 10, any(LocalDateTime.class)))
+        when(seatHoldRepository.findActiveHold(eq(1L), eq(10), any(LocalDateTime.class)))
                 .thenReturn(Optional.of(seatHold));
 
         // When
@@ -184,7 +184,7 @@ class SeatHoldServiceImplTest {
 
         // Then
         assertThat(result).isTrue();
-        verify(seatHoldRepository).findActiveHold(1L, 10, any(LocalDateTime.class));
+        verify(seatHoldRepository).findActiveHold(eq(1L), eq(10), any(LocalDateTime.class));
     }
 
     @Test

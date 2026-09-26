@@ -6,6 +6,6 @@ import jakarta.validation.constraints.NotBlank;
 import java.io.Serializable;
 
 public record LoginRequest(
-        @Email String email,
+        @NotBlank @Email String email,
         @NotBlank String password) implements Serializable {
 }

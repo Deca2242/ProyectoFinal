@@ -6,6 +6,7 @@ import com.web.dto.ticket.TicketCreateRequest;
 import com.web.dto.ticket.TicketResponse;
 import com.web.dto.ticket.mapper.TicketMapper;
 import com.web.entity.*;
+import com.web.exception.BusinessException;
 import com.web.exception.InvalidSegmentException;
 import com.web.exception.OverbookingNotAllowedException;
 import com.web.exception.ResourceNotFoundException;
@@ -15,6 +16,7 @@ import com.web.service.admin.ConfigService;
 import com.web.util.QrCodeGenerator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -67,6 +69,12 @@ public class TicketServiceImpl implements TicketService {
 
         validateSegment(trip, fromStop, toStop);
 
+        Integer capacity = trip.getBus().getCapacity();
+        if (request.seatNumber() < 1 || request.seatNumber() > capacity) {
+            throw new SeatNotAvailableException(
+                    "El asiento " + request.seatNumber() + " no existe en este bus (capacidad: " + capacity + ")");
+        }
+
         // Verificar si hay una reserva temporal activa en este asiento
         Optional<SeatHold> activeHold = seatHoldRepository.findActiveHold(
                 request.tripId(),
@@ -80,11 +88,12 @@ public class TicketServiceImpl implements TicketService {
         }
 
         // Verificar disponibilidad del asiento para el tramo específico (puede estar ocupado en otros tramos)
+        // La consulta compara el ORDEN de las paradas en la ruta, no sus IDs
         Boolean isSeatAvailable = ticketRepository.isSeatAvailableForSegment(
                 request.tripId(),
                 request.seatNumber(),
-                request.fromStopId().intValue(),
-                request.toStopId().intValue()
+                fromStop.getOrder(),
+                toStop.getOrder()
         );
 
         if (!isSeatAvailable) {
@@ -157,7 +166,15 @@ public class TicketServiceImpl implements TicketService {
 
         LocalDateTime now = LocalDateTime.now();
         LocalDateTime departureTime = ticket.getTrip().getDepartureTime();
-        
+
+        Trip.TripStatus tripStatus = ticket.getTrip().getStatus();
+        if (!departureTime.isAfter(now)
+                || tripStatus == Trip.TripStatus.DEPARTED
+                || tripStatus == Trip.TripStatus.ARRIVED) {
+            throw new BusinessException("No se puede cancelar un ticket de un viaje que ya salió",
+                    HttpStatus.BAD_REQUEST, "TRIP_ALREADY_DEPARTED");
+        }
+
         Duration timeUntilDeparture = Duration.between(now, departureTime);
         long hoursUntilDeparture = timeUntilDeparture.toHours();
 
@@ -262,10 +279,8 @@ public class TicketServiceImpl implements TicketService {
         ).map(fareRule -> fareRule.getBasePrice())
          .orElse(configService.getTicketBasePrice());
 
-        Long soldTickets = ticketRepository.countSoldTicketsInRange(
-                trip.getTripDate(),
-                trip.getTripDate()
-        );
+        // La demanda se mide sobre la ocupación de ESTE viaje, no sobre todos los viajes del día
+        Long soldTickets = ticketRepository.countSoldSeats(trip.getId());
         int capacity = trip.getBus().getCapacity();
         double occupancyRate = (double) soldTickets / capacity;
 

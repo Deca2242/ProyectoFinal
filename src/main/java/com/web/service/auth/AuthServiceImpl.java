@@ -11,6 +11,8 @@ import com.web.exception.InvalidCredentialsException;
 import com.web.repository.UserRepository;
 import com.web.util.JwtTokenProvider;
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -35,7 +37,8 @@ public class AuthServiceImpl implements AuthService {
 
         User user = userMapper.toEntity(request);
 
-        if (user.getRole() == null) {
+        // El registro público solo crea pasajeros; otros roles requieren un ADMIN autenticado
+        if (user.getRole() == null || !isCurrentUserAdmin()) {
             user.setRole(User.Role.PASSENGER);
         }
 
@@ -70,6 +73,14 @@ public class AuthServiceImpl implements AuthService {
     @Override
     public boolean validateToken(String token) {
         return jwtTokenProvider.validateToken(token);
+    }
+
+    private boolean isCurrentUserAdmin() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        return authentication != null
+                && authentication.isAuthenticated()
+                && authentication.getAuthorities().stream()
+                        .anyMatch(authority -> "ROLE_ADMIN".equals(authority.getAuthority()));
     }
 }
 

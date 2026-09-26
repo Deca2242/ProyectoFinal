@@ -8,8 +8,9 @@ import java.io.Serializable;
 
 public record RegisterRequest(
         @NotBlank String name,
-        @Email String email,
+        @NotBlank @Email String email,
         @NotBlank String phone,
         @NotBlank String password,
-        User.Role role) implements Serializable {
+        User.Role role // Solo un ADMIN autenticado puede registrar roles distintos de PASSENGER
+) implements Serializable {
 }

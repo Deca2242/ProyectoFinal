@@ -8,6 +8,8 @@ import com.web.entity.Parcel;
 import com.web.entity.Stop;
 import com.web.entity.Trip;
 import com.web.exception.BusinessException;
+import com.web.exception.InvalidSegmentException;
+import com.web.exception.InvalidStateTransitionException;
 import com.web.exception.ResourceNotFoundException;
 import com.web.repository.IncidentRepository;
 import com.web.repository.ParcelRepository;
@@ -61,6 +63,15 @@ public class ParcelServiceImpl implements ParcelService {
         Stop toStop = stopRepository.findById(request.toStopId())
                 .orElseThrow(() -> new ResourceNotFoundException("Parada destino", request.toStopId()));
 
+        // Las paradas deben pertenecer a la ruta del viaje y respetar el sentido del recorrido
+        Long routeId = trip.getRoute().getId();
+        if (!fromStop.getRoute().getId().equals(routeId) || !toStop.getRoute().getId().equals(routeId)) {
+            throw new InvalidSegmentException("Las paradas no pertenecen a la ruta del viaje");
+        }
+        if (fromStop.getOrder() >= toStop.getOrder()) {
+            throw new InvalidSegmentException("La parada de origen debe ser anterior a la de destino");
+        }
+
         String code = qrCodeGenerator.generateParcelCode();
         String deliveryOtp = otpGenerator.generate6DigitOtp();
 
@@ -86,15 +97,25 @@ public class ParcelServiceImpl implements ParcelService {
     public ParcelResponse trackParcel(String code) {
         Parcel parcel = parcelRepository.findByCode(code)
                 .orElseThrow(() -> new ResourceNotFoundException("Encomienda con código: " + code));
-        return parcelMapper.toResponse(parcel);
+        // El rastreo es público: no se devuelve el OTP de entrega
+        return parcelMapper.toPublicResponse(parcel);
     }
 
     // Actualiza el estado de una encomienda
+    // DELIVERED solo se alcanza con deliverWithOtp; aquí se validan el resto de transiciones
     @Override
     @Transactional
     public ParcelResponse updateStatus(Long parcelId, Parcel.ParcelStatus status) {
         Parcel parcel = parcelRepository.findById(parcelId)
                 .orElseThrow(() -> new ResourceNotFoundException("Encomienda", parcelId));
+
+        if (status == Parcel.ParcelStatus.DELIVERED) {
+            throw new BusinessException("La entrega debe registrarse con OTP y foto de prueba",
+                    HttpStatus.BAD_REQUEST, "DELIVERY_REQUIRES_OTP");
+        }
+        if (!isValidStatusTransition(parcel.getStatus(), status)) {
+            throw new InvalidStateTransitionException(parcel.getStatus().name(), status.name());
+        }
 
         parcel.setStatus(status);
         Parcel updatedParcel = parcelRepository.save(parcel);
@@ -124,8 +145,8 @@ public class ParcelServiceImpl implements ParcelService {
                     .entityType(Incident.EntityType.PARCEL)
                     .entityId(parcelId)
                     .incidentType(Incident.IncidentType.DELIVERY_FAIL)
-                    .description("Entrega fallida: OTP inválido. OTP esperado: " + parcel.getDeliveryOtp() +
-                            ", OTP proporcionado: " + otp)
+                    // No se registra el OTP esperado: quien lea el incidente no debe poder reutilizarlo
+                    .description("Entrega fallida: OTP inválido para la encomienda " + parcel.getCode())
                     .createdAt(LocalDateTime.now())
                     .build();
             incidentRepository.save(incident);
@@ -138,6 +159,7 @@ public class ParcelServiceImpl implements ParcelService {
 
         parcel.setStatus(Parcel.ParcelStatus.DELIVERED);
         parcel.setProofPhotoUrl(photoUrl);
+        parcel.setDeliveredAt(LocalDateTime.now());
         Parcel deliveredParcel = parcelRepository.save(parcel);
 
 
@@ -159,5 +181,15 @@ public class ParcelServiceImpl implements ParcelService {
     public List<ParcelResponse> getParcelsByDateRange(LocalDate startDate, LocalDate endDate) {
         List<Parcel> parcels = parcelRepository.findByDateRange(startDate, endDate);
         return parcelMapper.toResponseList(parcels);
+    }
+
+    // CREATED → IN_TRANSIT | FAILED, IN_TRANSIT → FAILED, FAILED → IN_TRANSIT (reintento). DELIVERED es final.
+    private boolean isValidStatusTransition(Parcel.ParcelStatus current, Parcel.ParcelStatus target) {
+        return switch (current) {
+            case CREATED -> target == Parcel.ParcelStatus.IN_TRANSIT || target == Parcel.ParcelStatus.FAILED;
+            case IN_TRANSIT -> target == Parcel.ParcelStatus.FAILED;
+            case FAILED -> target == Parcel.ParcelStatus.IN_TRANSIT;
+            case DELIVERED -> false;
+        };
     }
 }

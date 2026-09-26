@@ -32,26 +32,29 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         
         try {
             String token = extractTokenFromHeader(request);
-            
+
             if (token != null && jwtTokenProvider.validateToken(token)) {
                 String email = jwtTokenProvider.extractEmail(token);
-
                 UserDetails userDetails = userDetailsService.loadUserByUsername(email);
-                
-                UsernamePasswordAuthenticationToken authentication = 
-                    new UsernamePasswordAuthenticationToken(
-                        userDetails, 
-                        null, 
-                        userDetails.getAuthorities()
-                    );
-                
-                authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
-                SecurityContextHolder.getContext().setAuthentication(authentication);
-                
+
+                // Un usuario desactivado no debe seguir operando aunque su token no haya expirado
+                if (userDetails.isEnabled()) {
+                    UsernamePasswordAuthenticationToken authentication =
+                        new UsernamePasswordAuthenticationToken(
+                            userDetails,
+                            null,
+                            userDetails.getAuthorities()
+                        );
+
+                    authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
+                    SecurityContextHolder.getContext().setAuthentication(authentication);
+                }
             }
         } catch (Exception ex) {
+            // Token inválido o usuario inexistente: la petición continúa sin autenticación
+            SecurityContextHolder.clearContext();
         }
-        
+
         filterChain.doFilter(request, response);
     }
     

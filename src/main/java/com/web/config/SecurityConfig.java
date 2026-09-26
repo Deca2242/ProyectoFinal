@@ -75,6 +75,8 @@ public class SecurityConfig {
                         // Dispatch
                         .requestMatchers(HttpMethod.POST, "/api/v1/trips/*/assign").hasRole("DISPATCHER")
                         .requestMatchers(HttpMethod.POST, "/api/v1/trips/*/boarding/**").hasRole("DISPATCHER")
+                        .requestMatchers(HttpMethod.GET, "/api/v1/trips/*/assignment").hasAnyRole("DISPATCHER", "DRIVER")
+                        .requestMatchers(HttpMethod.PUT, "/api/v1/trips/*/assignment").hasRole("DISPATCHER")
                         .requestMatchers(HttpMethod.POST, "/api/v1/trips/*/depart").hasRole("DRIVER")
 
                         // Parcels

@@ -185,7 +185,7 @@ class AssignmentServiceImplTest {
 
     @Test
     void shouldGetDriverAssignments_WithValidDriverId_ReturnList() {
-        // Given
+        // Given: sin fecha se devuelven todas las asignaciones del conductor
         List<Assignment> assignments = List.of(assignment);
         List<AssignmentResponse> responses = List.of(assignmentResponse);
 
@@ -193,12 +193,31 @@ class AssignmentServiceImplTest {
         when(assignmentMapper.toResponseList(assignments)).thenReturn(responses);
 
         // When
-        List<AssignmentResponse> result = assignmentService.getDriverAssignments(1L, LocalDate.now());
+        List<AssignmentResponse> result = assignmentService.getDriverAssignments(1L, null);
 
         // Then
         assertThat(result).isNotNull();
         assertThat(result).hasSize(1);
         verify(assignmentRepository).findByDriverId(1L);
+    }
+
+    @Test
+    void shouldGetDriverAssignments_WithDate_FilterByDate() {
+        // Given: con fecha se filtra por los viajes de ese día
+        LocalDate date = LocalDate.now();
+        List<Assignment> assignments = List.of(assignment);
+        List<AssignmentResponse> responses = List.of(assignmentResponse);
+
+        when(assignmentRepository.findDriverAssignmentsForDate(1L, date)).thenReturn(assignments);
+        when(assignmentMapper.toResponseList(assignments)).thenReturn(responses);
+
+        // When
+        List<AssignmentResponse> result = assignmentService.getDriverAssignments(1L, date);
+
+        // Then
+        assertThat(result).hasSize(1);
+        verify(assignmentRepository).findDriverAssignmentsForDate(1L, date);
+        verify(assignmentRepository, never()).findByDriverId(anyLong());
     }
 }
 

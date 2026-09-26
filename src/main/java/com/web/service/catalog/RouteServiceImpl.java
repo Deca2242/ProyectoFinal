@@ -21,6 +21,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 
 
@@ -91,13 +93,15 @@ public class RouteServiceImpl implements RouteService {
         Route route = routeRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Ruta", id));
 
-        if (tripRepository.countByRouteIdAndTripDateAfter(id, LocalDate.now()) > 0) {
+        // Se incluyen los viajes de hoy (antes solo se contaban los posteriores a hoy)
+        if (tripRepository.countByRouteIdAndTripDateGreaterThanEqual(id, LocalDate.now()) > 0) {
             throw new BusinessException("No se puede eliminar la ruta porque tiene viajes programados", HttpStatus.BAD_REQUEST, "ROUTE_HAS_TRIPS");
         }
 
-        routeRepository.delete(route);
-
-
+        // Borrado lógico: los viajes y tickets históricos siguen referenciando la ruta,
+        // un DELETE físico violaría las llaves foráneas
+        route.setIsActive(false);
+        routeRepository.save(route);
     }
 
     //Añadir parada
@@ -116,8 +120,15 @@ public class RouteServiceImpl implements RouteService {
 
         Stop savedStop = stopRepository.save(stop);
 
+        // La ruta ya está en el contexto de persistencia con su lista de paradas cargada:
+        // volver a consultarla devolvería la misma instancia sin la parada nueva
+        if (route.getStops() == null) {
+            route.setStops(new ArrayList<>());
+        }
+        route.getStops().add(savedStop);
+        route.getStops().sort(Comparator.comparing(Stop::getOrder));
 
-        return getRouteById(routeId);
+        return routeMapper.toDetailResponse(route);
     }
 
     //Remover parada

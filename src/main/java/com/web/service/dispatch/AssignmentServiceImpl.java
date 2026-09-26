@@ -95,6 +95,16 @@ public class AssignmentServiceImpl implements AssignmentService {
 
         assignmentMapper.updateEntityFromRequest(request, assignment);
 
+        // El mapper ignora driverId: el cambio de conductor se valida y aplica aquí
+        if (request.driverId() != null) {
+            User driver = userRepository.findById(request.driverId())
+                    .orElseThrow(() -> new ResourceNotFoundException("Conductor", request.driverId()));
+            if (driver.getRole() != User.Role.DRIVER) {
+                throw new BusinessException("El usuario no es un conductor", HttpStatus.BAD_REQUEST, "INVALID_DRIVER_ROLE");
+            }
+            assignment.setDriver(driver);
+        }
+
         Assignment updatedAssignment = assignmentRepository.save(assignment);
 
 
@@ -105,8 +115,9 @@ public class AssignmentServiceImpl implements AssignmentService {
     @Override
     @Transactional(readOnly = true)
     public List<AssignmentResponse> getDriverAssignments(Long driverId, LocalDate date) {
-        List<Assignment> assignments = assignmentRepository.findByDriverId(driverId);
-        // Filtrar por fecha si es necesario
+        List<Assignment> assignments = date != null
+                ? assignmentRepository.findDriverAssignmentsForDate(driverId, date)
+                : assignmentRepository.findByDriverId(driverId);
         return assignmentMapper.toResponseList(assignments);
     }
 

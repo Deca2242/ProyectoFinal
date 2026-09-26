@@ -2,6 +2,7 @@ package com.web.controller;
 
 import com.web.dto.dispatch.Assignment.AssignmentCreateRequest;
 import com.web.dto.dispatch.Assignment.AssignmentResponse;
+import com.web.dto.dispatch.Assignment.AssignmentUpdateRequest;
 import com.web.dto.trip.TripResponse;
 import com.web.exception.BusinessException;
 import com.web.service.dispatch.AssignmentService;
@@ -43,6 +44,25 @@ public class DispatchController {
 
         AssignmentResponse response = assignmentService.assignTrip(validatedRequest);
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
+    }
+
+    // Consulta la asignación (conductor, despachador y checklist) de un viaje
+    @GetMapping("/assignment")
+    @PreAuthorize("hasAnyRole('DISPATCHER', 'DRIVER')")
+    public ResponseEntity<AssignmentResponse> getAssignment(@PathVariable Long tripId) {
+        return ResponseEntity.ok(assignmentService.getAssignmentByTrip(tripId));
+    }
+
+    // Actualiza el checklist de salida (checklist, SOAT, revisión técnica) o el conductor asignado
+    @PutMapping("/assignment")
+    @PreAuthorize("hasRole('DISPATCHER')")
+    public ResponseEntity<AssignmentResponse> updateAssignment(
+            @PathVariable Long tripId,
+            @RequestBody AssignmentUpdateRequest request) {
+
+        AssignmentResponse current = assignmentService.getAssignmentByTrip(tripId);
+        AssignmentResponse response = assignmentService.updateChecklist(current.id(), request);
+        return ResponseEntity.ok(response);
     }
 
     // Abre o cierra el abordaje de un viaje

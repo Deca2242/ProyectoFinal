@@ -3,8 +3,10 @@ package com.web.dto.parcel.mapper;
 import com.web.dto.parcel.ParcelCreateRequest;
 import com.web.dto.parcel.ParcelResponse;
 import com.web.entity.Parcel;
+import org.mapstruct.InheritConfiguration;
 import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
+import org.mapstruct.Named;
 
 import java.util.List;
 
@@ -20,6 +22,12 @@ public interface ParcelMapper {
     @Mapping(target = "toStopId", source = "toStop.id")
     @Mapping(target = "toStopName", source = "toStop.name")
     ParcelResponse toResponse(Parcel parcel);
+
+    // Entity → Response para el rastreo público: nunca expone el OTP de entrega
+    @Named("toPublicResponse")
+    @InheritConfiguration(name = "toResponse")
+    @Mapping(target = "deliveryOtp", ignore = true)
+    ParcelResponse toPublicResponse(Parcel parcel);
     
     List<ParcelResponse> toResponseList(List<Parcel> parcels);
     

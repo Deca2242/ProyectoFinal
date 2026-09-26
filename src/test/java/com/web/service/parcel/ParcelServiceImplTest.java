@@ -6,6 +6,7 @@ import com.web.dto.parcel.ParcelResponse;
 import com.web.dto.parcel.mapper.ParcelMapper;
 import com.web.entity.Incident;
 import com.web.entity.Parcel;
+import com.web.entity.Route;
 import com.web.entity.Stop;
 import com.web.entity.Trip;
 import com.web.exception.BusinessException;
@@ -62,18 +63,28 @@ class ParcelServiceImplTest {
 
     @BeforeEach
     void setUp() {
+        Route route = Route.builder()
+                .id(1L)
+                .name("Route Name")
+                .build();
+
         trip = Trip.builder()
                 .id(1L)
+                .route(route)
                 .build();
 
         fromStop = Stop.builder()
                 .id(1L)
+                .route(route)
                 .name("Origin")
+                .order(1)
                 .build();
 
         toStop = Stop.builder()
                 .id(2L)
+                .route(route)
                 .name("Destination")
+                .order(2)
                 .build();
 
         parcel = Parcel.builder()
@@ -131,7 +142,7 @@ class ParcelServiceImplTest {
     void shouldTrackParcel_WithValidCode_ReturnParcelResponse() {
         // Given
         when(parcelRepository.findByCode("PARCEL001")).thenReturn(Optional.of(parcel));
-        when(parcelMapper.toResponse(parcel)).thenReturn(parcelResponse);
+        when(parcelMapper.toPublicResponse(parcel)).thenReturn(parcelResponse);
 
         // When
         ParcelResponse result = parcelService.trackParcel("PARCEL001");
@@ -140,6 +151,8 @@ class ParcelServiceImplTest {
         assertThat(result).isNotNull();
         assertThat(result.code()).isEqualTo("PARCEL001");
         verify(parcelRepository).findByCode("PARCEL001");
+        // El rastreo público nunca usa el mapeo que incluye el OTP
+        verify(parcelMapper, never()).toResponse(any(Parcel.class));
     }
 
     @Test
@@ -185,18 +198,31 @@ class ParcelServiceImplTest {
     @Test
     void shouldUpdateStatus_WithValidStatus_UpdateParcel() {
         // Given
+        parcel.setStatus(Parcel.ParcelStatus.CREATED);
         when(parcelRepository.findById(1L)).thenReturn(Optional.of(parcel));
         when(parcelRepository.save(any(Parcel.class))).thenReturn(parcel);
         when(parcelMapper.toResponse(any(Parcel.class))).thenReturn(parcelResponse);
 
         // When
-        ParcelResponse result = parcelService.updateStatus(1L, Parcel.ParcelStatus.DELIVERED);
+        ParcelResponse result = parcelService.updateStatus(1L, Parcel.ParcelStatus.IN_TRANSIT);
 
         // Then
         assertThat(result).isNotNull();
-        verify(parcelRepository).save(argThat(p -> 
-            p.getStatus() == Parcel.ParcelStatus.DELIVERED
+        verify(parcelRepository).save(argThat(p ->
+            p.getStatus() == Parcel.ParcelStatus.IN_TRANSIT
         ));
+    }
+
+    @Test
+    void shouldUpdateStatus_ToDeliveredWithoutOtp_ThrowException() {
+        // Given
+        when(parcelRepository.findById(1L)).thenReturn(Optional.of(parcel));
+
+        // When/Then: DELIVERED solo se alcanza con deliverWithOtp
+        assertThatThrownBy(() -> parcelService.updateStatus(1L, Parcel.ParcelStatus.DELIVERED))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("OTP");
+        verify(parcelRepository, never()).save(any());
     }
 
     @Test
