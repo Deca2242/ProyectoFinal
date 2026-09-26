@@ -6,15 +6,17 @@ import com.web.dto.trip.TripCreateRequest;
 import com.web.dto.trip.TripDetailResponse;
 import com.web.dto.trip.TripResponse;
 import com.web.config.CustomUserDetailsService;
+import com.web.config.SecurityConfig;
 import com.web.entity.Trip;
-
+import com.web.exception.InvalidSegmentException;
+import com.web.exception.InvalidStateTransitionException;
 import com.web.exception.ResourceNotFoundException;
 import com.web.service.trip.TripService;
 import com.web.util.JwtTokenProvider;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.context.annotation.Import;
 
 import org.springframework.http.MediaType;
 import org.springframework.security.test.context.support.WithMockUser;
@@ -26,6 +28,8 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.anonymous;
@@ -33,7 +37,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 @WebMvcTest(TripController.class)
-@AutoConfigureMockMvc(addFilters = false)
+@Import(SecurityConfig.class)
 class TripControllerTest {
 
     @Autowired
@@ -174,6 +178,261 @@ class TripControllerTest {
         mvc.perform(delete("/api/v1/trips/1")
                         .with(csrf()))
                 .andExpect(status().isNoContent());
+    }
+
+    private TripResponse trip(Trip.TripStatus status) {
+        return new TripResponse(
+                1L, 1L, "Route Name", "Origin", "Destination",
+                1L, "ABC123", 40,
+                LocalDate.now(), LocalDateTime.now(), null,
+                status, 0, 0.0
+        );
+    }
+
+    private TripCreateRequest validCreateRequest() {
+        return new TripCreateRequest(
+                1L, 1L, LocalDate.now().plusDays(1),
+                LocalDateTime.now().plusDays(1).plusHours(8),
+                LocalDateTime.now().plusDays(1).plusHours(12)
+        );
+    }
+
+    // GET /trips
+
+    // Verifica que se pueda buscar solo por fecha
+    @Test
+    void searchTrips_shouldReturn200WithOnlyDate() throws Exception {
+        LocalDate date = LocalDate.of(2026, 10, 1);
+        when(tripService.searchTrips(null, date)).thenReturn(List.of(trip(Trip.TripStatus.SCHEDULED)));
+
+        mvc.perform(get("/api/v1/trips")
+                        .with(anonymous())
+                        .param("date", "2026-10-01"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].status").value("SCHEDULED"));
+    }
+
+    // Verifica que se pueda buscar solo por ruta
+    @Test
+    void searchTrips_shouldReturn200WithOnlyRouteId() throws Exception {
+        when(tripService.searchTrips(1L, null)).thenReturn(List.of());
+
+        mvc.perform(get("/api/v1/trips")
+                        .with(anonymous())
+                        .param("routeId", "1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$").isEmpty());
+    }
+
+    // Verifica que una fecha con formato inválido devuelva 400
+    @Test
+    void searchTrips_shouldReturn400WhenDateIsInvalid() throws Exception {
+        mvc.perform(get("/api/v1/trips")
+                        .with(anonymous())
+                        .param("date", "01/10/2026"))
+                .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(tripService);
+    }
+
+    // Verifica que un routeId no numérico devuelva 400
+    @Test
+    void searchTrips_shouldReturn400WhenRouteIdIsNotNumeric() throws Exception {
+        mvc.perform(get("/api/v1/trips")
+                        .with(anonymous())
+                        .param("routeId", "uno"))
+                .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(tripService);
+    }
+
+    // GET /trips/{id}
+
+    // Verifica que un id no numérico devuelva 400
+    @Test
+    void getTripById_shouldReturn400WhenIdIsNotNumeric() throws Exception {
+        mvc.perform(get("/api/v1/trips/abc")
+                        .with(anonymous()))
+                .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(tripService);
+    }
+
+    // GET /trips/{id}/seats
+
+    // Verifica que falte un parámetro obligatorio del tramo
+    @Test
+    void getSeatAvailability_shouldReturn400WhenToStopIdMissing() throws Exception {
+        mvc.perform(get("/api/v1/trips/1/seats")
+                        .with(anonymous())
+                        .param("fromStopId", "1"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("Parámetro inválido o faltante en la petición"));
+
+        verifyNoInteractions(tripService);
+    }
+
+    // Verifica que un tramo inválido devuelva 400
+    @Test
+    void getSeatAvailability_shouldReturn400WhenSegmentInvalid() throws Exception {
+        when(tripService.getSeatAvailability(1L, 2L, 1L))
+                .thenThrow(new InvalidSegmentException("La parada de origen debe ser anterior a la de destino"));
+
+        mvc.perform(get("/api/v1/trips/1/seats")
+                        .with(anonymous())
+                        .param("fromStopId", "2")
+                        .param("toStopId", "1"))
+                .andExpect(status().isBadRequest());
+    }
+
+    // Verifica que retorne 404 cuando el viaje no existe
+    @Test
+    void getSeatAvailability_shouldReturn404WhenTripNotFound() throws Exception {
+        when(tripService.getSeatAvailability(99L, 1L, 2L)).thenThrow(new ResourceNotFoundException("Viaje", 99L));
+
+        mvc.perform(get("/api/v1/trips/99/seats")
+                        .with(anonymous())
+                        .param("fromStopId", "1")
+                        .param("toStopId", "2"))
+                .andExpect(status().isNotFound());
+    }
+
+    // POST /trips
+
+    // Verifica que se rechace un viaje sin ruta ni bus
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void createTrip_shouldReturn400WhenInvalid() throws Exception {
+        mvc.perform(post("/api/v1/trips")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"tripDate\":\"2026-10-01\",\"departureTime\":\"2026-10-01T08:00:00\",\"arrivalEta\":\"2026-10-01T12:00:00\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.validationErrors.routeId").exists())
+                .andExpect(jsonPath("$.validationErrors.busId").exists());
+
+        verifyNoInteractions(tripService);
+    }
+
+    // Verifica que retorne 404 cuando la ruta o el bus no existen
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void createTrip_shouldReturn404WhenRouteNotFound() throws Exception {
+        when(tripService.createTrip(any())).thenThrow(new ResourceNotFoundException("Ruta", 1L));
+
+        mvc.perform(post("/api/v1/trips")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(om.writeValueAsString(validCreateRequest())))
+                .andExpect(status().isNotFound());
+    }
+
+    // Verifica que un DISPATCHER no pueda crear viajes
+    @Test
+    @WithMockUser(roles = "DISPATCHER")
+    void createTrip_shouldReturn403ForDispatcher() throws Exception {
+        mvc.perform(post("/api/v1/trips")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(om.writeValueAsString(validCreateRequest())))
+                .andExpect(status().isForbidden());
+
+        verifyNoInteractions(tripService);
+    }
+
+    // Verifica que sin autenticación no se puedan crear viajes
+    @Test
+    void createTrip_shouldReturn401WhenAnonymous() throws Exception {
+        mvc.perform(post("/api/v1/trips")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(om.writeValueAsString(validCreateRequest())))
+                .andExpect(status().isUnauthorized());
+
+        verifyNoInteractions(tripService);
+    }
+
+    // PUT /trips/{id}/status
+
+    // Verifica que un estado inexistente devuelva 400
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void updateTripStatus_shouldReturn400WhenStatusUnknown() throws Exception {
+        mvc.perform(put("/api/v1/trips/1/status")
+                        .with(csrf())
+                        .param("status", "VOLANDO"))
+                .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(tripService);
+    }
+
+    // Verifica que falte el parámetro status
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void updateTripStatus_shouldReturn400WhenStatusMissing() throws Exception {
+        mvc.perform(put("/api/v1/trips/1/status")
+                        .with(csrf()))
+                .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(tripService);
+    }
+
+    // Verifica que retorne 404 cuando el viaje no existe
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void updateTripStatus_shouldReturn404WhenNotFound() throws Exception {
+        when(tripService.updateTripStatus(99L, Trip.TripStatus.BOARDING)).thenThrow(new ResourceNotFoundException("Viaje", 99L));
+
+        mvc.perform(put("/api/v1/trips/99/status")
+                        .with(csrf())
+                        .param("status", "BOARDING"))
+                .andExpect(status().isNotFound());
+    }
+
+    // Verifica que una transición no permitida devuelva 422
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void updateTripStatus_shouldReturn422WhenInvalidTransition() throws Exception {
+        when(tripService.updateTripStatus(1L, Trip.TripStatus.SCHEDULED))
+                .thenThrow(new InvalidStateTransitionException("ARRIVED", "SCHEDULED"));
+
+        mvc.perform(put("/api/v1/trips/1/status")
+                        .with(csrf())
+                        .param("status", "SCHEDULED"))
+                .andExpect(status().isUnprocessableEntity());
+    }
+
+    // Verifica que un DISPATCHER no pueda cambiar el estado de un viaje por esta vía
+    @Test
+    @WithMockUser(roles = "DISPATCHER")
+    void updateTripStatus_shouldReturn403ForDispatcher() throws Exception {
+        mvc.perform(put("/api/v1/trips/1/status")
+                        .with(csrf())
+                        .param("status", "BOARDING"))
+                .andExpect(status().isForbidden());
+
+        verifyNoInteractions(tripService);
+    }
+
+    // DELETE /trips/{id}
+
+    // Verifica que un PASSENGER no pueda cancelar viajes
+    @Test
+    @WithMockUser(roles = "PASSENGER")
+    void cancelTrip_shouldReturn403ForPassenger() throws Exception {
+        mvc.perform(delete("/api/v1/trips/1")
+                        .with(csrf()))
+                .andExpect(status().isForbidden());
+
+        verifyNoInteractions(tripService);
+    }
+
+    // Verifica que sin autenticación no se puedan cancelar viajes
+    @Test
+    void cancelTrip_shouldReturn401WhenAnonymous() throws Exception {
+        mvc.perform(delete("/api/v1/trips/1"))
+                .andExpect(status().isUnauthorized());
+
+        verifyNoInteractions(tripService);
     }
 }
 

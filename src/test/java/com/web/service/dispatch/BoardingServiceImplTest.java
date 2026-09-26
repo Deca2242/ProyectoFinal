@@ -170,5 +170,154 @@ class BoardingServiceImplTest {
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("revisión");
     }
+
+    @Test
+    void shouldOpenBoarding_WithNonExistentTrip_ThrowResourceNotFound() {
+        // Given
+        when(tripRepository.findById(99L)).thenReturn(Optional.empty());
+
+        // When/Then
+        assertThatThrownBy(() -> boardingService.openBoarding(99L))
+                .isInstanceOf(ResourceNotFoundException.class)
+                .hasMessageContaining("99");
+        verify(tripRepository, never()).save(any());
+    }
+
+    @Test
+    void shouldOpenBoarding_WithBoardingTrip_ThrowAndKeepStatus() {
+        // Given: el abordaje ya está abierto
+        trip.setStatus(Trip.TripStatus.BOARDING);
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+
+        // When/Then
+        assertThatThrownBy(() -> boardingService.openBoarding(1L))
+                .isInstanceOf(InvalidStateTransitionException.class)
+                .hasMessageContaining("BOARDING");
+        assertThat(trip.getStatus()).isEqualTo(Trip.TripStatus.BOARDING);
+        verify(tripRepository, never()).save(any());
+        verifyNoInteractions(tripMapper);
+    }
+
+    @Test
+    void shouldCloseBoarding_WithBoardingTrip_KeepBoardingStatus() {
+        // Given: cerrar el abordaje no cambia el estado hasta la salida
+        trip.setStatus(Trip.TripStatus.BOARDING);
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+        when(tripRepository.save(trip)).thenReturn(trip);
+        when(tripMapper.toResponse(trip)).thenReturn(tripResponse);
+
+        // When
+        TripResponse result = boardingService.closeBoarding(1L);
+
+        // Then
+        assertThat(result).isSameAs(tripResponse);
+        verify(tripRepository).save(argThat(t -> t.getStatus() == Trip.TripStatus.BOARDING));
+    }
+
+    @Test
+    void shouldCloseBoarding_WithScheduledTrip_ThrowInvalidStateTransition() {
+        // Given: no se puede cerrar un abordaje que nunca se abrió
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+
+        // When/Then
+        assertThatThrownBy(() -> boardingService.closeBoarding(1L))
+                .isInstanceOf(InvalidStateTransitionException.class)
+                .hasMessageContaining("SCHEDULED");
+        verify(tripRepository, never()).save(any());
+    }
+
+    @Test
+    void shouldCloseBoarding_WithNonExistentTrip_ThrowResourceNotFound() {
+        // Given
+        when(tripRepository.findById(99L)).thenReturn(Optional.empty());
+
+        // When/Then
+        assertThatThrownBy(() -> boardingService.closeBoarding(99L))
+                .isInstanceOf(ResourceNotFoundException.class);
+        verify(tripRepository, never()).save(any());
+    }
+
+    @Test
+    void shouldDepartTrip_WithNonExistentTrip_ThrowResourceNotFound() {
+        // Given
+        when(tripRepository.findById(99L)).thenReturn(Optional.empty());
+
+        // When/Then
+        assertThatThrownBy(() -> boardingService.departTrip(99L))
+                .isInstanceOf(ResourceNotFoundException.class);
+        verifyNoInteractions(assignmentRepository);
+    }
+
+    @Test
+    void shouldDepartTrip_WithScheduledTrip_ThrowInvalidStateTransition() {
+        // Given: no se puede partir sin haber abierto el abordaje
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+
+        // When/Then
+        assertThatThrownBy(() -> boardingService.departTrip(1L))
+                .isInstanceOf(InvalidStateTransitionException.class)
+                .hasMessageContaining("BOARDING");
+        verifyNoInteractions(assignmentRepository);
+        verify(tripRepository, never()).save(any());
+    }
+
+    @Test
+    void shouldDepartTrip_WithoutAssignment_ThrowNoAssignment() {
+        // Given: el viaje está en abordaje pero no tiene conductor asignado
+        trip.setStatus(Trip.TripStatus.BOARDING);
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+        when(assignmentRepository.findByTripId(1L)).thenReturn(Optional.empty());
+
+        // When/Then
+        assertThatThrownBy(() -> boardingService.departTrip(1L))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getCode())
+                .isEqualTo("NO_ASSIGNMENT");
+        assertThat(trip.getStatus()).isEqualTo(Trip.TripStatus.BOARDING);
+        verify(tripRepository, never()).save(any());
+    }
+
+    @Test
+    void shouldDepartTrip_WithoutChecklistOk_NotChangeStatus() {
+        // Given
+        trip.setStatus(Trip.TripStatus.BOARDING);
+        assignment.setChecklistOk(false);
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+        when(assignmentRepository.findByTripId(1L)).thenReturn(Optional.of(assignment));
+
+        // When/Then
+        assertThatThrownBy(() -> boardingService.departTrip(1L))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getCode())
+                .isEqualTo("CHECKLIST_NOT_APPROVED");
+        assertThat(trip.getStatus()).isEqualTo(Trip.TripStatus.BOARDING);
+        verify(tripRepository, never()).save(any());
+    }
+
+    @Test
+    void shouldGetTripStatus_WithValidId_ReturnTripResponse() {
+        // Given
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+        when(tripMapper.toResponse(trip)).thenReturn(tripResponse);
+
+        // When
+        TripResponse result = boardingService.getTripStatus(1L);
+
+        // Then
+        assertThat(result).isSameAs(tripResponse);
+        verify(tripRepository, never()).save(any());
+    }
+
+    @Test
+    void shouldGetTripStatus_WithNonExistentTrip_ThrowResourceNotFound() {
+        // Given
+        when(tripRepository.findById(99L)).thenReturn(Optional.empty());
+
+        // When/Then
+        assertThatThrownBy(() -> boardingService.getTripStatus(99L))
+                .isInstanceOf(ResourceNotFoundException.class)
+                .hasMessageContaining("99");
+        verifyNoInteractions(tripMapper);
+    }
 }
 
