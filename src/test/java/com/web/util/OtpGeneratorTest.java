@@ -106,4 +106,11 @@ class OtpGeneratorTest {
         // When / Then: dígitos de otro alfabeto no equivalen a los ASCII (se compara en UTF-8)
         assertThat(otpGenerator.validateOtp("١٢٣٤٥٦", "123456")).isFalse();
     }
+
+    @Test
+    void shouldValidateOtp_WithBlankExpected_ReturnFalse() {
+        // Un OTP esperado vacío nunca debe dar una entrega válida, aunque el enviado también esté vacío
+        assertThat(otpGenerator.validateOtp("", "")).isFalse();
+        assertThat(otpGenerator.validateOtp("  ", " ")).isFalse();
+    }
 }

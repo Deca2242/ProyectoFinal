@@ -128,12 +128,14 @@ public class TripServiceImpl implements TripService {
                 // Calcular los campos que faltan
                 Long soldSeatsCount = ticketRepository.countSoldSeats(trip.getId());
                 Integer capacity = trip.getBus().getCapacity();
-                Integer availableSeatsCount = capacity - soldSeatsCount.intValue();
+                // Sillas vendibles: las físicas más las de overbooking aprobadas por el DISPATCHER
+                int sellableSeats = capacity + approvedOverbookingSeats(trip);
+                Integer availableSeatsCount = Math.max(0, sellableSeats - soldSeatsCount.intValue());
                 Double occupancy = capacity > 0 ? (soldSeatsCount.doubleValue() / capacity) * 100.0 : 0.0;
 
                 // Calcular números de asientos disponibles
                 List<Integer> availableSeatNumbers = new ArrayList<>();
-                for (int seatNum = 1; seatNum <= capacity; seatNum++) {
+                for (int seatNum = 1; seatNum <= sellableSeats; seatNum++) {
                         // Verificar si el asiento está vendido para cualquier tramo del viaje
                         boolean isSold = ticketRepository.existsByTripIdAndSeatNumberAndStatus(
                                         trip.getId(),
@@ -194,7 +196,8 @@ public class TripServiceImpl implements TripService {
                 Integer fromStopOrder = fromStop.getOrder();
                 Integer toStopOrder = toStop.getOrder();
 
-                for (Integer seatNumber = 1; seatNumber <= capacity; seatNumber++) {
+                int sellableSeats = capacity + approvedOverbookingSeats(trip);
+                for (Integer seatNumber = 1; seatNumber <= sellableSeats; seatNumber++) {
                         Boolean isAvailable = ticketRepository.isSeatAvailableForSegment(
                                         tripId, seatNumber, fromStopOrder, toStopOrder);
 
@@ -341,5 +344,9 @@ public class TripServiceImpl implements TripService {
                 if (!isValidTransition) {
                         throw new InvalidStateTransitionException(currentStatus.name(), newStatus.name());
                 }
+        }
+
+        private int approvedOverbookingSeats(Trip trip) {
+                return trip.getOverbookingApprovedSeats() == null ? 0 : trip.getOverbookingApprovedSeats();
         }
 }

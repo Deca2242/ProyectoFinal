@@ -203,4 +203,14 @@ class DtoValidationTest {
         // When/Then
         assertThat(invalidPaths(request)).containsExactly("weightKg");
     }
+
+    @Test
+    void shouldRejectParcelCreate_WithNonPositivePrice() {
+        // Given: un precio negativo restaría en los ingresos de las métricas
+        ParcelCreateRequest request = new ParcelCreateRequest(1L, "Remitente", "300", "Destinatario", "301",
+                1L, null, 2L, null, new BigDecimal("-100"), BigDecimal.ONE, null);
+
+        // When/Then
+        assertThat(invalidPaths(request)).containsExactly("price");
+    }
 }

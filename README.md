@@ -186,7 +186,7 @@ Todos usan la contraseña **`Password123`**. Es solo para desarrollo: en producc
 | Concurrencia | `ConcurrentSeatSaleIntegrationTest` | 8 compras u 8 holds simultáneos de la misma silla y tramo: solo uno gana |
 
 - Los tests de repositorio e integración usan **Testcontainers** (`postgres:15-alpine`) y se **omiten automáticamente** si no hay Docker (`@Testcontainers(disabledWithoutDocker = true)`).
-- **Estado actual:** 994 tests, 0 fallos, ejecutados contra PostgreSQL real. Cobertura: 96 % de líneas y 95 % de ramas.
+- **Estado actual:** 1230 tests, 0 fallos, ejecutados contra PostgreSQL real. Cobertura: 97 % de líneas y 95 % de ramas.
 - **Cobertura:** JaCoCo genera el reporte en `target/site/jacoco/index.html` al ejecutar `./mvnw test`. Se excluyen las clases generadas `*MapperImpl`.
 
 ## Errores corregidos en la revisión

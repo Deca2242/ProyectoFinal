@@ -203,6 +203,43 @@ class TripServiceImplTest {
         verify(ticketRepository, times(40)).isSeatAvailableForSegment(anyLong(), anyInt(), anyInt(), anyInt());
     }
 
+    @Test
+    void shouldGetSeatAvailability_WithApprovedOverbooking_IncludeExtraSeats() {
+        // Given: 2 sillas de overbooking aprobadas => se listan las sillas 1..42
+        trip.setOverbookingApprovedSeats(2);
+        Stop fromStop = Stop.builder().id(1L).route(route).order(1).build();
+        Stop toStop = Stop.builder().id(2L).route(route).order(2).build();
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+        when(stopRepository.findById(1L)).thenReturn(Optional.of(fromStop));
+        when(stopRepository.findById(2L)).thenReturn(Optional.of(toStop));
+        when(ticketRepository.isSeatAvailableForSegment(anyLong(), anyInt(), anyInt(), anyInt())).thenReturn(true);
+
+        // When
+        List<SeatStatusResponse> result = tripService.getSeatAvailability(1L, 1L, 2L);
+
+        // Then
+        assertThat(result).hasSize(42);
+        assertThat(result.get(41).seatNumber()).isEqualTo(42);
+    }
+
+    @Test
+    void shouldGetTripById_WithOverbookingSold_NeverReturnNegativeAvailableSeats() {
+        // Given: 42 sillas vendidas en un bus de 40 con solo 1 aprobada
+        trip.setOverbookingApprovedSeats(1);
+        when(tripRepository.findByIdWithDetails(1L)).thenReturn(Optional.of(trip));
+        when(tripMapper.toDetailResponse(trip)).thenReturn(tripDetailResponse);
+        when(ticketRepository.countSoldSeats(1L)).thenReturn(42L);
+        when(ticketRepository.existsByTripIdAndSeatNumberAndStatus(anyLong(), anyInt(), any())).thenReturn(true);
+
+        // When
+        TripDetailResponse result = tripService.getTripById(1L);
+
+        // Then
+        assertThat(result.availableSeats()).isZero();
+        assertThat(result.availableSeatNumbers()).isEmpty();
+        verify(ticketRepository, times(41)).existsByTripIdAndSeatNumberAndStatus(anyLong(), anyInt(), any());
+    }
+
     // ==================== createTrip ====================
 
     @Test

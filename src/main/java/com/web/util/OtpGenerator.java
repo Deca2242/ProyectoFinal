@@ -15,7 +15,8 @@ public class OtpGenerator {
     }
 
     public boolean validateOtp(String provided, String expected) {
-        if (provided == null || expected == null) {
+        // Un OTP esperado vacío nunca valida (evita que "" == "" dé una entrega válida)
+        if (provided == null || expected == null || expected.isBlank()) {
             return false;
         }
         // Comparación en tiempo constante para no filtrar cuántos dígitos coinciden
