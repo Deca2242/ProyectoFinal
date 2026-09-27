@@ -4,6 +4,11 @@ import com.web.service.admin.MetricsService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.web.dto.admin.ConfigResponse;
 import com.web.dto.admin.ConfigUpdateRequest;
+import com.web.dto.admin.MetricsResponse;
+import com.web.dto.admin.OccupancyMetrics;
+import com.web.dto.admin.OperationalMetrics;
+import com.web.dto.admin.ParcelMetrics;
+import com.web.dto.admin.RevenueMetrics;
 import com.web.config.CustomUserDetailsService;
 import com.web.config.SecurityConfig;
 import com.web.entity.User;
@@ -12,6 +17,8 @@ import com.web.repository.UserRepository;
 import com.web.service.admin.ConfigService;
 import com.web.util.JwtTokenProvider;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
@@ -23,6 +30,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
@@ -36,6 +44,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
@@ -324,6 +333,127 @@ class  AdminControllerTest {
                         .content(om.writeValueAsString(minimalUpdateRequest())))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.message").value("La operación viola una restricción de integridad de los datos"));
+    }
+
+    // Verifica que un descuento fuera de 0..100 se rechace con 400 antes de llegar al servicio
+    @Test
+    @WithMockUser(username = "admin@example.com", roles = "ADMIN")
+    void updateConfig_shouldReturn400WhenDiscountAboveHundred() throws Exception {
+        mvc.perform(put("/api/v1/admin/config")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"discountPercentages\": {\"STUDENT\": 150}}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("Error de validación en los datos enviados"));
+
+        verifyNoInteractions(configService);
+    }
+
+    // Verifica que un porcentaje máximo de overbooking mayor a 1 se rechace con 400
+    @Test
+    @WithMockUser(username = "admin@example.com", roles = "ADMIN")
+    void updateConfig_shouldReturn400WhenOverbookingMaxPercentageAboveOne() throws Exception {
+        mvc.perform(put("/api/v1/admin/config")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"overbookingMaxPercentage\": 1.5}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.validationErrors.overbookingMaxPercentage").exists());
+
+        verifyNoInteractions(configService);
+    }
+
+    // GET /metrics
+
+    private MetricsResponse sampleMetrics() {
+        return new MetricsResponse(
+                new OccupancyMetrics(45.5, 40.0, 90.0, 12, 300),
+                new RevenueMetrics(new BigDecimal("1500000"), new BigDecimal("1200000"), new BigDecimal("200000"),
+                        new BigDecimal("50000"), new BigDecimal("50000"),
+                        Map.of("CASH", new BigDecimal("700000")), Map.of("BOX_OFFICE", new BigDecimal("700000"))),
+                new OperationalMetrics(91.7, null, 4.2, 3, 1, 5),
+                new ParcelMetrics(10, 8, 1, 88.9, Map.of("R1", 10), Map.of("A → B", 8), Map.of("A → B", 1)));
+    }
+
+    // Verifica que un ADMIN consulte los KPIs del rango de fechas
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void getMetrics_shouldReturn200ForAdmin() throws Exception {
+        when(metricsService.getMetrics(LocalDate.of(2026, 1, 1), LocalDate.of(2026, 1, 31))).thenReturn(sampleMetrics());
+
+        mvc.perform(get("/api/v1/admin/metrics")
+                        .param("startDate", "2026-01-01")
+                        .param("endDate", "2026-01-31"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.occupancy.averageOccupancy").value(45.5))
+                .andExpect(jsonPath("$.occupancy.p95Occupancy").value(90.0))
+                .andExpect(jsonPath("$.revenue.revenueByPaymentMethod.CASH").value(700000))
+                .andExpect(jsonPath("$.revenue.revenueByChannel.BOX_OFFICE").value(700000))
+                .andExpect(jsonPath("$.operational.onTimeDepartureRate").value(91.7))
+                .andExpect(jsonPath("$.operational.totalNoShows").value(5))
+                .andExpect(jsonPath("$.parcels.deliveredBySegment['A → B']").value(8));
+
+        verify(metricsService).getMetrics(LocalDate.of(2026, 1, 1), LocalDate.of(2026, 1, 31));
+    }
+
+    // Verifica que los roles distintos de ADMIN no puedan consultar las métricas
+    @ParameterizedTest
+    @ValueSource(strings = {"DISPATCHER", "PASSENGER", "CLERK", "DRIVER"})
+    void getMetrics_shouldReturn403ForOtherRoles(String role) throws Exception {
+        mvc.perform(get("/api/v1/admin/metrics")
+                        .with(user("u@test.com").roles(role))
+                        .param("startDate", "2026-01-01")
+                        .param("endDate", "2026-01-31"))
+                .andExpect(status().isForbidden());
+
+        verifyNoInteractions(metricsService);
+    }
+
+    // Verifica que sin autenticación se responda 401
+    @Test
+    void getMetrics_shouldReturn401WhenNotAuthenticated() throws Exception {
+        mvc.perform(get("/api/v1/admin/metrics")
+                        .param("startDate", "2026-01-01")
+                        .param("endDate", "2026-01-31"))
+                .andExpect(status().isUnauthorized());
+
+        verifyNoInteractions(metricsService);
+    }
+
+    // Verifica que falte un parámetro obligatorio responda 400
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void getMetrics_shouldReturn400WhenParameterMissing() throws Exception {
+        mvc.perform(get("/api/v1/admin/metrics").param("startDate", "2026-01-01"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("Parámetro inválido o faltante en la petición"));
+
+        verifyNoInteractions(metricsService);
+    }
+
+    // Verifica que una fecha con formato inválido responda 400
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void getMetrics_shouldReturn400WhenDateFormatInvalid() throws Exception {
+        mvc.perform(get("/api/v1/admin/metrics")
+                        .param("startDate", "01/01/2026")
+                        .param("endDate", "2026-01-31"))
+                .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(metricsService);
+    }
+
+    // Verifica que un rango invertido rechazado por el servicio responda 400
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void getMetrics_shouldReturn400WhenRangeInvalid() throws Exception {
+        when(metricsService.getMetrics(LocalDate.of(2026, 2, 1), LocalDate.of(2026, 1, 1))).thenThrow(
+                new BusinessException("La fecha final no puede ser anterior a la inicial",
+                        HttpStatus.BAD_REQUEST, "INVALID_DATE_RANGE"));
+
+        mvc.perform(get("/api/v1/admin/metrics")
+                        .param("startDate", "2026-02-01")
+                        .param("endDate", "2026-01-01"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("La fecha final no puede ser anterior a la inicial"));
     }
 }
 

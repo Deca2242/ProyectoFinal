@@ -10,9 +10,18 @@ import com.web.entity.Trip;
 import com.web.config.CustomUserDetailsService;
 import com.web.config.SecurityConfig;
 import com.web.dto.dispatch.Assignment.AssignmentUpdateRequest;
+import com.web.dto.baggage.BaggageResponse;
+import com.web.dto.baggage.TripBaggageSummaryResponse;
+import com.web.dto.dispatch.OverbookingApprovalResponse;
 import com.web.exception.BusinessException;
 import com.web.exception.InvalidStateTransitionException;
+import com.web.exception.OverbookingNotAllowedException;
 import com.web.exception.ResourceNotFoundException;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+
+import java.math.BigDecimal;
+import java.util.List;
 
 import com.web.service.dispatch.AssignmentService;
 import com.web.service.dispatch.BoardingService;
@@ -40,6 +49,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -498,6 +508,162 @@ class DispatchControllerTest {
         mvc.perform(post("/api/v1/trips/1/depart").with(csrf()))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.message").value("No se puede partir sin checklist aprobado"));
+    }
+
+    // Overbooking: aprobación de sillas extra por el DISPATCHER
+
+    // Verifica que un DISPATCHER apruebe una silla extra y reciba el número de silla aprobado
+    @Test
+    @WithMockUser(roles = "DISPATCHER")
+    void approveOverbooking_shouldReturn200ForDispatcher() throws Exception {
+        var resp = new OverbookingApprovalResponse(1L, 40, 39L, 97.5, 1, 2, 41);
+        when(overbookingService.approveExtraSeat(1L)).thenReturn(resp);
+
+        mvc.perform(post("/api/v1/trips/1/overbooking/approve").with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.tripId").value(1))
+                .andExpect(jsonPath("$.capacity").value(40))
+                .andExpect(jsonPath("$.soldSeats").value(39))
+                .andExpect(jsonPath("$.occupancyPercentage").value(97.5))
+                .andExpect(jsonPath("$.approvedExtraSeats").value(1))
+                .andExpect(jsonPath("$.maxExtraSeats").value(2))
+                .andExpect(jsonPath("$.approvedSeatNumber").value(41));
+
+        verify(overbookingService).approveExtraSeat(1L);
+    }
+
+    // Verifica que solo el DISPATCHER pueda aprobar overbooking
+    @ParameterizedTest
+    @ValueSource(strings = {"DRIVER", "CLERK", "ADMIN", "PASSENGER"})
+    void approveOverbooking_shouldReturn403ForOtherRoles(String role) throws Exception {
+        mvc.perform(post("/api/v1/trips/1/overbooking/approve").with(csrf()).with(user("u@test.com").roles(role)))
+                .andExpect(status().isForbidden());
+
+        verifyNoInteractions(overbookingService);
+    }
+
+    // Verifica que sin autenticación se responda 401
+    @Test
+    void approveOverbooking_shouldReturn401WhenAnonymous() throws Exception {
+        mvc.perform(post("/api/v1/trips/1/overbooking/approve"))
+                .andExpect(status().isUnauthorized());
+
+        verifyNoInteractions(overbookingService);
+    }
+
+    // Verifica que un rechazo de la regla de overbooking responda 403 con su mensaje
+    @Test
+    @WithMockUser(roles = "DISPATCHER")
+    void approveOverbooking_shouldReturn403WhenRuleNotMet() throws Exception {
+        when(overbookingService.approveExtraSeat(1L)).thenThrow(new OverbookingNotAllowedException(
+                "El overbooking requiere una ocupación mayor al 95% (actual: 50.0%)"));
+
+        mvc.perform(post("/api/v1/trips/1/overbooking/approve").with(csrf()))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.status").value(403))
+                .andExpect(jsonPath("$.message").value("El overbooking requiere una ocupación mayor al 95% (actual: 50.0%)"));
+    }
+
+    // Verifica que un viaje inexistente responda 404
+    @Test
+    @WithMockUser(roles = "DISPATCHER")
+    void approveOverbooking_shouldReturn404WhenTripNotFound() throws Exception {
+        when(overbookingService.approveExtraSeat(99L)).thenThrow(new ResourceNotFoundException("Viaje", 99L));
+
+        mvc.perform(post("/api/v1/trips/99/overbooking/approve").with(csrf()))
+                .andExpect(status().isNotFound());
+    }
+
+    // Conteo de equipaje del viaje
+
+    // Verifica que DISPATCHER, DRIVER y CLERK puedan consultar el equipaje del viaje
+    @ParameterizedTest
+    @ValueSource(strings = {"DISPATCHER", "DRIVER", "CLERK"})
+    void getTripBaggage_shouldReturn200ForAllowedRoles(String role) throws Exception {
+        var item = new BaggageResponse(1L, 10L, new BigDecimal("25.00"), new BigDecimal("10000.00"), "TAG-1", LocalDateTime.now());
+        var resp = new TripBaggageSummaryResponse(1L, 1, new BigDecimal("25.00"), new BigDecimal("10000.00"), List.of(item));
+        when(baggageSummaryService.getTripBaggage(1L)).thenReturn(resp);
+
+        mvc.perform(get("/api/v1/trips/1/baggage").with(user("u@test.com").roles(role)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.tripId").value(1))
+                .andExpect(jsonPath("$.totalPieces").value(1))
+                .andExpect(jsonPath("$.totalWeightKg").value(25.00))
+                .andExpect(jsonPath("$.items[0].tagCode").value("TAG-1"));
+    }
+
+    // Verifica que un PASSENGER (u otro rol no autorizado) no vea el equipaje del viaje
+    @ParameterizedTest
+    @ValueSource(strings = {"PASSENGER", "ADMIN"})
+    void getTripBaggage_shouldReturn403ForOtherRoles(String role) throws Exception {
+        mvc.perform(get("/api/v1/trips/1/baggage").with(user("u@test.com").roles(role)))
+                .andExpect(status().isForbidden());
+
+        verifyNoInteractions(baggageSummaryService);
+    }
+
+    // Verifica que el conteo de un viaje inexistente responda 404
+    @Test
+    @WithMockUser(roles = "CLERK")
+    void getTripBaggage_shouldReturn404WhenTripNotFound() throws Exception {
+        when(baggageSummaryService.getTripBaggage(99L)).thenThrow(new ResourceNotFoundException("Viaje", 99L));
+
+        mvc.perform(get("/api/v1/trips/99/baggage"))
+                .andExpect(status().isNotFound());
+    }
+
+    // Llegada del viaje
+
+    // Verifica que el conductor registre la llegada
+    @Test
+    @WithMockUser(roles = "DRIVER")
+    void arriveTrip_shouldReturn200ForDriver() throws Exception {
+        var resp = new TripResponse(
+                1L, 1L, "Route Name", "Origin", "Destination",
+                1L, "ABC123", 40,
+                LocalDate.now(), LocalDateTime.now(), null,
+                Trip.TripStatus.ARRIVED, 0, 0.0
+        );
+        when(boardingService.arriveTrip(1L)).thenReturn(resp);
+
+        mvc.perform(post("/api/v1/trips/1/arrive").with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("ARRIVED"));
+
+        verify(boardingService).arriveTrip(1L);
+    }
+
+    // Verifica que un DISPATCHER no pueda registrar la llegada (solo el conductor)
+    @Test
+    @WithMockUser(roles = "DISPATCHER")
+    void arriveTrip_shouldReturn403ForDispatcher() throws Exception {
+        mvc.perform(post("/api/v1/trips/1/arrive").with(csrf()))
+                .andExpect(status().isForbidden());
+
+        verifyNoInteractions(boardingService);
+    }
+
+    // Verifica que un conductor no asignado reciba 403
+    @Test
+    @WithMockUser(roles = "DRIVER")
+    void arriveTrip_shouldReturn403WhenDriverNotAssigned() throws Exception {
+        when(boardingService.arriveTrip(1L)).thenThrow(new BusinessException(
+                "El conductor no está asignado a este viaje", HttpStatus.FORBIDDEN, "DRIVER_NOT_ASSIGNED"));
+
+        mvc.perform(post("/api/v1/trips/1/arrive").with(csrf()))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.message").value("El conductor no está asignado a este viaje"));
+    }
+
+    // Verifica que registrar la llegada de un viaje que no ha partido responda 422
+    @Test
+    @WithMockUser(roles = "DRIVER")
+    void arriveTrip_shouldReturn422WhenTripNotDeparted() throws Exception {
+        when(boardingService.arriveTrip(1L)).thenThrow(new InvalidStateTransitionException(
+                "Solo se puede registrar la llegada desde estado DEPARTED (actual: BOARDING)"));
+
+        mvc.perform(post("/api/v1/trips/1/arrive").with(csrf()))
+                .andExpect(status().isUnprocessableEntity());
     }
 }
 

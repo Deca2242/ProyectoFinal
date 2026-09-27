@@ -5,6 +5,7 @@ import com.web.dto.payment.CashCloseResponse;
 import com.web.dto.payment.PaymentConfirmRequest;
 import com.web.dto.ticket.TicketResponse;
 import com.web.dto.ticket.mapper.TicketMapper;
+import com.web.entity.Baggage;
 import com.web.entity.Ticket;
 import com.web.entity.Trip;
 import com.web.entity.User;
@@ -281,6 +282,96 @@ class PaymentServiceImplTest {
         assertThat(result.closedAt()).isNotNull();
         verify(ticketRepository).findCashTicketsPurchasedBetween(
                 LocalDateTime.of(2026, 3, 15, 0, 0), LocalDateTime.of(2026, 3, 16, 0, 0));
+    }
+
+    // ---------- Cierre de caja: equipaje y reembolsos ----------
+
+    private Ticket cashTicket(long id, String price, Ticket.TicketStatus status) {
+        return Ticket.builder()
+                .id(id)
+                .trip(trip)
+                .price(new BigDecimal(price))
+                .status(status)
+                .paymentMethod(Ticket.PaymentMethod.CASH)
+                .build();
+    }
+
+    @Test
+    void shouldCloseCash_WithBaggageExcessFees_AddThemToExpectedCash() {
+        // Given: equipaje con exceso, equipaje sin exceso (null) y ticket sin equipaje
+        LocalDate date = LocalDate.of(2026, 3, 15);
+        Ticket withExcess = cashTicket(1L, "50000", Ticket.TicketStatus.SOLD);
+        withExcess.setBaggage(Baggage.builder().excessFee(new BigDecimal("15000.50")).build());
+        Ticket withNullExcess = cashTicket(2L, "30000", Ticket.TicketStatus.SOLD);
+        withNullExcess.setBaggage(Baggage.builder().excessFee(null).build());
+        Ticket withoutBaggage = cashTicket(3L, "20000", Ticket.TicketStatus.SOLD);
+        CashCloseRequest request = new CashCloseRequest(1L, date, null, new BigDecimal("115000.50"), null);
+
+        when(userRepository.findById(1L)).thenReturn(Optional.of(user));
+        when(ticketRepository.findCashTicketsPurchasedBetween(date.atStartOfDay(), date.plusDays(1).atStartOfDay()))
+                .thenReturn(List.of(withExcess, withNullExcess, withoutBaggage));
+        when(ticketRepository.findCashTicketsCancelledBetween(date.atStartOfDay(), date.plusDays(1).atStartOfDay()))
+                .thenReturn(List.of());
+
+        // When
+        CashCloseResponse result = paymentService.closeCash(request, 1L);
+
+        // Then: 50000 + 15000.50 + 30000 + 20000
+        assertThat(result.expectedAmount()).isEqualByComparingTo("115000.50");
+        assertThat(result.difference()).isEqualByComparingTo("0");
+        assertThat(result.ticketCount()).isEqualTo(3);
+    }
+
+    @Test
+    void shouldCloseCash_WithCancelledTicketsOfTheDay_SubtractRefunds() {
+        // Given: el ticket vendido y cancelado el mismo día cuenta su venta y resta su reembolso;
+        // otro cancelado hoy (vendido otro día) solo resta su reembolso; uno sin reembolso resta 0
+        LocalDate date = LocalDate.of(2026, 3, 15);
+        Ticket soldToday = cashTicket(1L, "50000", Ticket.TicketStatus.SOLD);
+        Ticket soldAndCancelledToday = cashTicket(2L, "40000", Ticket.TicketStatus.CANCELLED);
+        soldAndCancelledToday.setRefundAmount(new BigDecimal("36000"));
+        Ticket cancelledFromAnotherDay = cashTicket(3L, "60000", Ticket.TicketStatus.CANCELLED);
+        cancelledFromAnotherDay.setRefundAmount(new BigDecimal("30000"));
+        Ticket cancelledWithoutRefund = cashTicket(4L, "10000", Ticket.TicketStatus.CANCELLED);
+        cancelledWithoutRefund.setRefundAmount(null);
+        CashCloseRequest request = new CashCloseRequest(1L, date, null, new BigDecimal("20000"), null);
+
+        when(userRepository.findById(1L)).thenReturn(Optional.of(user));
+        when(ticketRepository.findCashTicketsPurchasedBetween(date.atStartOfDay(), date.plusDays(1).atStartOfDay()))
+                .thenReturn(List.of(soldToday, soldAndCancelledToday));
+        when(ticketRepository.findCashTicketsCancelledBetween(date.atStartOfDay(), date.plusDays(1).atStartOfDay()))
+                .thenReturn(List.of(soldAndCancelledToday, cancelledFromAnotherDay, cancelledWithoutRefund));
+
+        // When
+        CashCloseResponse result = paymentService.closeCash(request, 1L);
+
+        // Then: (50000 + 40000) - (36000 + 30000 + 0) = 24000
+        assertThat(result.expectedAmount()).isEqualByComparingTo("24000");
+        assertThat(result.difference()).isEqualByComparingTo("-4000");
+        assertThat(result.ticketCount()).isEqualTo(2);
+    }
+
+    @Test
+    void shouldCloseCash_WithOnlyRefunds_ReturnNegativeExpectedCash() {
+        // Given: día sin ventas en efectivo pero con reembolsos
+        LocalDate date = LocalDate.of(2026, 3, 15);
+        Ticket cancelled = cashTicket(1L, "60000", Ticket.TicketStatus.CANCELLED);
+        cancelled.setRefundAmount(new BigDecimal("42000"));
+        CashCloseRequest request = new CashCloseRequest(1L, date, null, new BigDecimal("-42000"), null);
+
+        when(userRepository.findById(1L)).thenReturn(Optional.of(user));
+        when(ticketRepository.findCashTicketsPurchasedBetween(date.atStartOfDay(), date.plusDays(1).atStartOfDay()))
+                .thenReturn(List.of());
+        when(ticketRepository.findCashTicketsCancelledBetween(date.atStartOfDay(), date.plusDays(1).atStartOfDay()))
+                .thenReturn(List.of(cancelled));
+
+        // When
+        CashCloseResponse result = paymentService.closeCash(request, 1L);
+
+        // Then
+        assertThat(result.expectedAmount()).isEqualByComparingTo("-42000");
+        assertThat(result.difference()).isEqualByComparingTo("0");
+        assertThat(result.ticketCount()).isZero();
     }
 }
 

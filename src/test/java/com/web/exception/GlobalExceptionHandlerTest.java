@@ -1,6 +1,10 @@
 package com.web.exception;
 
 import com.web.dto.common.ErrorResponse;
+import jakarta.validation.Constraint;
+import jakarta.validation.ConstraintValidator;
+import jakarta.validation.ConstraintValidatorContext;
+import jakarta.validation.Payload;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -9,6 +13,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.MethodParameter;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -22,6 +27,9 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.validation.BeanPropertyBindingResult;
 import org.springframework.validation.FieldError;
+import org.springframework.validation.ObjectError;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -31,13 +39,20 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
 import java.time.LocalDateTime;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.nullValue;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
@@ -283,6 +298,68 @@ class GlobalExceptionHandlerTest {
         assertThat(response.getBody().validationErrors()).isNull();
     }
 
+    // Ruta inexistente, método no soportado, tipo de contenido no soportado
+
+    @Test
+    void shouldHandleNoResourceFound_Return404WithPath() {
+        // Given
+        NoResourceFoundException ex = new NoResourceFoundException(HttpMethod.GET, "api/v1/nope");
+
+        // When
+        ResponseEntity<ErrorResponse> response = handler.handleNoResource(ex);
+
+        // Then
+        assertError(response, HttpStatus.NOT_FOUND, "Recurso no encontrado: /api/v1/nope");
+        assertThat(response.getBody().validationErrors()).isNull();
+    }
+
+    @Test
+    void shouldHandleMethodNotSupported_Return405WithMethod() {
+        // Given
+        HttpRequestMethodNotSupportedException ex =
+                new HttpRequestMethodNotSupportedException("DELETE", List.of("GET", "POST"));
+
+        // When
+        ResponseEntity<ErrorResponse> response = handler.handleMethodNotSupported(ex);
+
+        // Then
+        assertError(response, HttpStatus.METHOD_NOT_ALLOWED, "Método HTTP no soportado: DELETE");
+    }
+
+    @Test
+    void shouldHandleMediaTypeNotSupported_Return415WithContentType() {
+        // Given
+        HttpMediaTypeNotSupportedException ex = new HttpMediaTypeNotSupportedException(
+                MediaType.TEXT_PLAIN, List.of(MediaType.APPLICATION_JSON));
+
+        // When
+        ResponseEntity<ErrorResponse> response = handler.handleMediaTypeNotSupported(ex);
+
+        // Then
+        assertError(response, HttpStatus.UNSUPPORTED_MEDIA_TYPE, "Tipo de contenido no soportado: text/plain");
+    }
+
+    @Test
+    void shouldHandleValidationErrors_WithClassLevelObjectError_UseObjectNameWithoutClassCast() throws Exception {
+        // Given: una restricción a nivel de clase produce un ObjectError (no FieldError)
+        BeanPropertyBindingResult bindingResult = new BeanPropertyBindingResult(new SampleRequest(1L, "x"), "request");
+        bindingResult.addError(new ObjectError("request", "la llegada debe ser posterior a la salida"));
+        bindingResult.addError(new FieldError("request", "name", "no debe estar vacío"));
+        MethodParameter parameter = new MethodParameter(
+                SampleController.class.getDeclaredMethod("create", SampleRequest.class), 0);
+        MethodArgumentNotValidException ex = new MethodArgumentNotValidException(parameter, bindingResult);
+
+        // When
+        ResponseEntity<ErrorResponse> response = handler.handleValidationExceptions(ex);
+
+        // Then
+        assertError(response, HttpStatus.BAD_REQUEST, "Error de validación en los datos enviados");
+        assertThat(response.getBody().validationErrors())
+                .containsEntry("request", "la llegada debe ser posterior a la salida")
+                .containsEntry("name", "no debe estar vacío")
+                .hasSize(2);
+    }
+
     // Integración con Spring MVC (MockMvc standalone): el advice resuelve las excepciones reales del framework
 
     @Nested
@@ -370,11 +447,70 @@ class GlobalExceptionHandlerTest {
                     .andExpect(jsonPath("$.validationErrors").value(nullValue()))
                     .andExpect(content().string(not(containsString("detalle interno"))));
         }
+
+        @Test
+        void shouldReturn404_WhenNoResourceFoundIsThrown() throws Exception {
+            mvc.perform(get("/test/missing-resource"))
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.status").value(404))
+                    .andExpect(jsonPath("$.message").value("Recurso no encontrado: /static/missing.js"));
+        }
+
+        @Test
+        void shouldReturn405_WhenHttpMethodIsNotSupported() throws Exception {
+            mvc.perform(delete("/test/items/1"))
+                    .andExpect(status().isMethodNotAllowed())
+                    .andExpect(jsonPath("$.status").value(405))
+                    .andExpect(jsonPath("$.message").value("Método HTTP no soportado: DELETE"));
+        }
+
+        @Test
+        void shouldReturn415_WhenContentTypeIsNotSupported() throws Exception {
+            mvc.perform(post("/test/create")
+                            .contentType(MediaType.TEXT_PLAIN)
+                            .content("tripId=1"))
+                    .andExpect(status().isUnsupportedMediaType())
+                    .andExpect(jsonPath("$.status").value(415))
+                    .andExpect(jsonPath("$.message").value(containsString("text/plain")));
+        }
+
+        @Test
+        void shouldReturn400WithObjectName_WhenClassLevelConstraintFails() throws Exception {
+            mvc.perform(post("/test/range")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"from\": 5, \"to\": 2}"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.message").value("Error de validación en los datos enviados"))
+                    .andExpect(jsonPath("$.validationErrors.rangeRequest").value("rango inválido"));
+        }
     }
 
     // Controlador mínimo solo para las pruebas del advice
 
     record SampleRequest(@NotNull Long tripId, @NotBlank String name) {
+    }
+
+    // Restricción a nivel de clase: produce un ObjectError sin campo
+    @Target(ElementType.TYPE)
+    @Retention(RetentionPolicy.RUNTIME)
+    @Constraint(validatedBy = ValidRangeValidator.class)
+    @interface ValidRange {
+        String message() default "rango inválido";
+
+        Class<?>[] groups() default {};
+
+        Class<? extends Payload>[] payload() default {};
+    }
+
+    public static class ValidRangeValidator implements ConstraintValidator<ValidRange, RangeRequest> {
+        @Override
+        public boolean isValid(RangeRequest value, ConstraintValidatorContext context) {
+            return value == null || value.from() == null || value.to() == null || value.from() < value.to();
+        }
+    }
+
+    @ValidRange
+    record RangeRequest(Integer from, Integer to) {
     }
 
     @RestController
@@ -418,6 +554,16 @@ class GlobalExceptionHandlerTest {
         @GetMapping("/test/boom")
         public String boom() {
             throw new IllegalStateException("detalle interno de la base de datos");
+        }
+
+        @GetMapping("/test/missing-resource")
+        public String missingResource() throws NoResourceFoundException {
+            throw new NoResourceFoundException(HttpMethod.GET, "static/missing.js");
+        }
+
+        @PostMapping("/test/range")
+        public String range(@Valid @RequestBody RangeRequest request) {
+            return "ok";
         }
     }
 }

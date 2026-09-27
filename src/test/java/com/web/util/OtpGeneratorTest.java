@@ -71,4 +71,39 @@ class OtpGeneratorTest {
         // When / Then
         assertThat(otpGenerator.validateOtp(otp, otp)).isTrue();
     }
+
+    @Test
+    void shouldValidateOtp_WithSameLengthDifferingInOneDigit_ReturnFalse() {
+        // When / Then: la comparación byte a byte no acepta coincidencias parciales
+        assertThat(otpGenerator.validateOtp("123457", "123456")).isFalse();
+        assertThat(otpGenerator.validateOtp("023456", "123456")).isFalse();
+        assertThat(otpGenerator.validateOtp("123 56", "123456")).isFalse();
+    }
+
+    @Test
+    void shouldValidateOtp_WithPrefixOrLongerValue_ReturnFalse() {
+        // When / Then: longitudes distintas nunca coinciden
+        assertThat(otpGenerator.validateOtp("1234567", "123456")).isFalse();
+        assertThat(otpGenerator.validateOtp("123", "123456")).isFalse();
+        assertThat(otpGenerator.validateOtp("123456", "1234567")).isFalse();
+    }
+
+    @Test
+    void shouldValidateOtp_WithInternalSpaces_NotTrimThem() {
+        // When / Then: solo se recortan los espacios de los extremos
+        assertThat(otpGenerator.validateOtp("12 34 56", "123456")).isFalse();
+        assertThat(otpGenerator.validateOtp("\n123456\n", "123456")).isTrue();
+    }
+
+    @Test
+    void shouldValidateOtp_WithBlankProvidedAndRealOtp_ReturnFalse() {
+        // When / Then
+        assertThat(otpGenerator.validateOtp("      ", "123456")).isFalse();
+    }
+
+    @Test
+    void shouldValidateOtp_WithNonAsciiDigits_ReturnFalse() {
+        // When / Then: dígitos de otro alfabeto no equivalen a los ASCII (se compara en UTF-8)
+        assertThat(otpGenerator.validateOtp("١٢٣٤٥٦", "123456")).isFalse();
+    }
 }

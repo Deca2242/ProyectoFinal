@@ -610,6 +610,86 @@ class ParcelServiceImplTest {
         assertThat(result).containsExactly(parcelResponse);
     }
 
+    // ==================== Estado del viaje y exposición del OTP ====================
+
+    @ParameterizedTest
+    @EnumSource(value = Trip.TripStatus.class, names = {"DEPARTED", "ARRIVED", "CANCELLED"})
+    void shouldCreateParcel_WithTripAlreadyDepartedOrCancelled_ThrowTripNotAvailable(Trip.TripStatus status) {
+        // Given
+        trip.setStatus(status);
+        ParcelCreateRequest request = buildParcelRequest();
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+
+        // When/Then
+        assertThatThrownBy(() -> parcelService.createParcel(request))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining(status.name())
+                .satisfies(ex -> {
+                    BusinessException be = (BusinessException) ex;
+                    assertThat(be.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+                    assertThat(be.getCode()).isEqualTo("TRIP_NOT_AVAILABLE");
+                });
+        verifyNoInteractions(stopRepository, qrCodeGenerator, otpGenerator, parcelMapper);
+        verify(parcelRepository, never()).save(any());
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = Trip.TripStatus.class, names = {"SCHEDULED", "BOARDING"})
+    void shouldCreateParcel_WithTripNotDeparted_ReturnResponseWithOtpOnly(Trip.TripStatus status) {
+        // Given
+        trip.setStatus(status);
+        ParcelCreateRequest request = buildParcelRequest();
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+        when(stopRepository.findById(1L)).thenReturn(Optional.of(fromStop));
+        when(stopRepository.findById(2L)).thenReturn(Optional.of(toStop));
+        when(qrCodeGenerator.generateParcelCode()).thenReturn("PARCEL001");
+        when(otpGenerator.generate6DigitOtp()).thenReturn("123456");
+        when(parcelMapper.toEntity(request)).thenReturn(parcel);
+        when(parcelRepository.save(parcel)).thenReturn(parcel);
+        when(parcelMapper.toResponseWithOtp(parcel)).thenReturn(parcelResponse);
+
+        // When
+        ParcelResponse result = parcelService.createParcel(request);
+
+        // Then: la taquilla recibe el OTP; no se usan los mapeos sin OTP
+        assertThat(result).isSameAs(parcelResponse);
+        assertThat(result.deliveryOtp()).isEqualTo("123456");
+        verify(parcelMapper, never()).toResponse(any(Parcel.class));
+        verify(parcelMapper, never()).toPublicResponse(any(Parcel.class));
+    }
+
+    @Test
+    void shouldUpdateStatus_UseResponseWithoutOtp() {
+        // Given
+        parcel.setStatus(Parcel.ParcelStatus.CREATED);
+        when(parcelRepository.findById(1L)).thenReturn(Optional.of(parcel));
+        when(parcelRepository.save(parcel)).thenReturn(parcel);
+        when(parcelMapper.toResponse(parcel)).thenReturn(parcelResponse);
+
+        // When
+        parcelService.updateStatus(1L, Parcel.ParcelStatus.IN_TRANSIT);
+
+        // Then
+        verify(parcelMapper).toResponse(parcel);
+        verify(parcelMapper, never()).toResponseWithOtp(any(Parcel.class));
+    }
+
+    @Test
+    void shouldDeliverWithOtp_UseResponseWithoutOtp() {
+        // Given
+        when(parcelRepository.findById(1L)).thenReturn(Optional.of(parcel));
+        when(otpGenerator.validateOtp("123456", "123456")).thenReturn(true);
+        when(parcelRepository.save(parcel)).thenReturn(parcel);
+        when(parcelMapper.toResponse(parcel)).thenReturn(parcelResponse);
+
+        // When
+        parcelService.deliverWithOtp(1L, "123456", "photo.jpg");
+
+        // Then
+        verify(parcelMapper).toResponse(parcel);
+        verify(parcelMapper, never()).toResponseWithOtp(any(Parcel.class));
+    }
+
     private ParcelCreateRequest buildParcelRequest() {
         return new ParcelCreateRequest(
                 1L, "Sender", "123456789", "Receiver", "987654321",

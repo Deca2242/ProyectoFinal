@@ -3,7 +3,9 @@ package com.web.service.dispatch;
 import com.web.dto.trip.TripResponse;
 import com.web.dto.trip.mapper.TripMapper;
 import com.web.entity.Assignment;
+import com.web.entity.Ticket;
 import com.web.entity.Trip;
+import com.web.entity.User;
 import com.web.exception.BusinessException;
 import com.web.exception.InvalidStateTransitionException;
 import com.web.exception.ResourceNotFoundException;
@@ -11,19 +13,29 @@ import com.web.repository.AssignmentRepository;
 import com.web.repository.TicketRepository;
 import com.web.repository.TripRepository;
 import com.web.service.admin.ConfigService;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpStatus;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.SecurityContextHolder;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.*;
 
 
@@ -325,6 +337,311 @@ class BoardingServiceImplTest {
                 .isInstanceOf(ResourceNotFoundException.class)
                 .hasMessageContaining("99");
         verifyNoInteractions(tripMapper);
+    }
+
+    // ---------- No-show al cerrar abordaje y al dar salida ----------
+
+    @AfterEach
+    void clearSecurityContext() {
+        SecurityContextHolder.clearContext();
+    }
+
+    private void authenticate(String username, String role) {
+        SecurityContextHolder.getContext().setAuthentication(new UsernamePasswordAuthenticationToken(
+                username, null, List.of(new SimpleGrantedAuthority("ROLE_" + role))));
+    }
+
+    private Ticket unboardedTicket(long id) {
+        return Ticket.builder().id(id).trip(trip).seatNumber((int) id).status(Ticket.TicketStatus.SOLD).build();
+    }
+
+    @Test
+    void shouldCloseBoarding_WithUnboardedOriginTickets_MarkNoShowWithFee() {
+        // Given
+        trip.setStatus(Trip.TripStatus.BOARDING);
+        Ticket t1 = unboardedTicket(1L);
+        Ticket t2 = unboardedTicket(2L);
+        List<Ticket> unboarded = List.of(t1, t2);
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+        when(ticketRepository.findUnboardedOriginTickets(1L)).thenReturn(unboarded);
+        when(configService.getNoShowFee()).thenReturn(BigDecimal.valueOf(5000));
+        when(tripRepository.save(trip)).thenReturn(trip);
+        when(tripMapper.toResponse(trip)).thenReturn(tripResponse);
+
+        // When
+        boardingService.closeBoarding(1L);
+
+        // Then
+        assertThat(unboarded).allSatisfy(t -> {
+            assertThat(t.getStatus()).isEqualTo(Ticket.TicketStatus.NO_SHOW);
+            assertThat(t.getNoShowFee()).isEqualByComparingTo("5000");
+        });
+        verify(ticketRepository).saveAll(unboarded);
+        verify(configService, times(1)).getNoShowFee();
+        assertThat(trip.getStatus()).isEqualTo(Trip.TripStatus.BOARDING);
+    }
+
+    @Test
+    void shouldCloseBoarding_WithoutUnboardedTickets_NotQueryFeeNorSave() {
+        // Given
+        trip.setStatus(Trip.TripStatus.BOARDING);
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+        when(ticketRepository.findUnboardedOriginTickets(1L)).thenReturn(List.of());
+        when(tripRepository.save(trip)).thenReturn(trip);
+        when(tripMapper.toResponse(trip)).thenReturn(tripResponse);
+
+        // When
+        boardingService.closeBoarding(1L);
+
+        // Then
+        verifyNoInteractions(configService);
+        verify(ticketRepository, never()).saveAll(anyList());
+    }
+
+    @Test
+    void shouldDepartTrip_WithUnboardedOriginTickets_MarkNoShowAndSetDepartedAt() {
+        // Given
+        trip.setStatus(Trip.TripStatus.BOARDING);
+        Ticket t1 = unboardedTicket(1L);
+        List<Ticket> unboarded = List.of(t1);
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+        when(assignmentRepository.findByTripId(1L)).thenReturn(Optional.of(assignment));
+        when(ticketRepository.findUnboardedOriginTickets(1L)).thenReturn(unboarded);
+        when(configService.getNoShowFee()).thenReturn(BigDecimal.valueOf(7000));
+        when(tripRepository.save(trip)).thenReturn(trip);
+        when(tripMapper.toResponse(trip)).thenReturn(tripResponse);
+        LocalDateTime before = LocalDateTime.now();
+
+        // When
+        boardingService.departTrip(1L);
+
+        // Then
+        assertThat(t1.getStatus()).isEqualTo(Ticket.TicketStatus.NO_SHOW);
+        assertThat(t1.getNoShowFee()).isEqualByComparingTo("7000");
+        verify(ticketRepository).saveAll(unboarded);
+        assertThat(trip.getStatus()).isEqualTo(Trip.TripStatus.DEPARTED);
+        assertThat(trip.getDepartedAt()).isNotNull().isBetween(before, LocalDateTime.now());
+    }
+
+    @Test
+    void shouldDepartTrip_WithoutUnboardedTickets_NotQueryFeeAndSetDepartedAt() {
+        // Given
+        trip.setStatus(Trip.TripStatus.BOARDING);
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+        when(assignmentRepository.findByTripId(1L)).thenReturn(Optional.of(assignment));
+        when(ticketRepository.findUnboardedOriginTickets(1L)).thenReturn(List.of());
+        when(tripRepository.save(trip)).thenReturn(trip);
+        when(tripMapper.toResponse(trip)).thenReturn(tripResponse);
+
+        // When
+        boardingService.departTrip(1L);
+
+        // Then
+        verifyNoInteractions(configService);
+        verify(ticketRepository, never()).saveAll(anyList());
+        assertThat(trip.getDepartedAt()).isNotNull();
+    }
+
+    @Test
+    void shouldDepartTrip_WithChecklistFailing_NotMarkNoShows() {
+        // Given: la validación del checklist ocurre antes del no-show
+        trip.setStatus(Trip.TripStatus.BOARDING);
+        assignment.setSoatValid(false);
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+        when(assignmentRepository.findByTripId(1L)).thenReturn(Optional.of(assignment));
+
+        // When/Then
+        assertThatThrownBy(() -> boardingService.departTrip(1L))
+                .isInstanceOf(BusinessException.class)
+                .extracting("code").isEqualTo("SOAT_NOT_VALID");
+        verifyNoInteractions(ticketRepository, configService);
+        assertThat(trip.getDepartedAt()).isNull();
+    }
+
+    // ---------- Conductor asignado ----------
+
+    @Test
+    void shouldDepartTrip_WithDriverNotAssigned_ThrowForbiddenDriverNotAssigned() {
+        // Given
+        authenticate("other.driver@test.com", "DRIVER");
+        trip.setStatus(Trip.TripStatus.BOARDING);
+        assignment.setDriver(User.builder().id(5L).email("driver@test.com").build());
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+        when(assignmentRepository.findByTripId(1L)).thenReturn(Optional.of(assignment));
+
+        // When/Then
+        assertThatThrownBy(() -> boardingService.departTrip(1L))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    BusinessException be = (BusinessException) ex;
+                    assertThat(be.getStatus()).isEqualTo(HttpStatus.FORBIDDEN);
+                    assertThat(be.getCode()).isEqualTo("DRIVER_NOT_ASSIGNED");
+                });
+        assertThat(trip.getStatus()).isEqualTo(Trip.TripStatus.BOARDING);
+        verify(tripRepository, never()).save(any());
+        verifyNoInteractions(ticketRepository, configService);
+    }
+
+    @Test
+    void shouldDepartTrip_WithDriverRoleAndAssignmentWithoutDriver_ThrowForbidden() {
+        // Given
+        authenticate("driver@test.com", "DRIVER");
+        trip.setStatus(Trip.TripStatus.BOARDING);
+        assignment.setDriver(null);
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+        when(assignmentRepository.findByTripId(1L)).thenReturn(Optional.of(assignment));
+
+        // When/Then
+        assertThatThrownBy(() -> boardingService.departTrip(1L))
+                .isInstanceOf(BusinessException.class)
+                .extracting("code").isEqualTo("DRIVER_NOT_ASSIGNED");
+    }
+
+    @Test
+    void shouldDepartTrip_WithAssignedDriver_IgnoreEmailCase() {
+        // Given
+        authenticate("Driver@Test.com", "DRIVER");
+        trip.setStatus(Trip.TripStatus.BOARDING);
+        assignment.setDriver(User.builder().id(5L).email("driver@test.com").build());
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+        when(assignmentRepository.findByTripId(1L)).thenReturn(Optional.of(assignment));
+        when(tripRepository.save(trip)).thenReturn(trip);
+        when(tripMapper.toResponse(trip)).thenReturn(tripResponse);
+
+        // When
+        TripResponse result = boardingService.departTrip(1L);
+
+        // Then
+        assertThat(result).isSameAs(tripResponse);
+        assertThat(trip.getStatus()).isEqualTo(Trip.TripStatus.DEPARTED);
+    }
+
+    @Test
+    void shouldDepartTrip_WithDispatcherRole_NotRequireDriverAssignment() {
+        // Given: un DISPATCHER no tiene la restricción de conductor asignado
+        authenticate("dispatcher@test.com", "DISPATCHER");
+        trip.setStatus(Trip.TripStatus.BOARDING);
+        assignment.setDriver(User.builder().id(5L).email("driver@test.com").build());
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+        when(assignmentRepository.findByTripId(1L)).thenReturn(Optional.of(assignment));
+        when(tripRepository.save(trip)).thenReturn(trip);
+        when(tripMapper.toResponse(trip)).thenReturn(tripResponse);
+
+        // When
+        boardingService.departTrip(1L);
+
+        // Then
+        assertThat(trip.getStatus()).isEqualTo(Trip.TripStatus.DEPARTED);
+    }
+
+    // ---------- Llegada ----------
+
+    @Test
+    void shouldArriveTrip_WithNonExistentTrip_ThrowResourceNotFound() {
+        // Given
+        when(tripRepository.findById(99L)).thenReturn(Optional.empty());
+
+        // When/Then
+        assertThatThrownBy(() -> boardingService.arriveTrip(99L))
+                .isInstanceOf(ResourceNotFoundException.class)
+                .hasMessageContaining("99");
+        verifyNoInteractions(assignmentRepository);
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = Trip.TripStatus.class, names = {"SCHEDULED", "BOARDING", "ARRIVED", "CANCELLED"})
+    void shouldArriveTrip_WithTripNotDeparted_ThrowUnprocessableEntity(Trip.TripStatus status) {
+        // Given
+        trip.setStatus(status);
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+
+        // When/Then
+        assertThatThrownBy(() -> boardingService.arriveTrip(1L))
+                .isInstanceOf(InvalidStateTransitionException.class)
+                .hasMessageContaining("DEPARTED")
+                .extracting("status").isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        verifyNoInteractions(assignmentRepository);
+        verify(tripRepository, never()).save(any());
+        assertThat(trip.getArrivedAt()).isNull();
+    }
+
+    @Test
+    void shouldArriveTrip_WithoutAssignment_ThrowNoAssignment() {
+        // Given
+        trip.setStatus(Trip.TripStatus.DEPARTED);
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+        when(assignmentRepository.findByTripId(1L)).thenReturn(Optional.empty());
+
+        // When/Then
+        assertThatThrownBy(() -> boardingService.arriveTrip(1L))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    BusinessException be = (BusinessException) ex;
+                    assertThat(be.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+                    assertThat(be.getCode()).isEqualTo("NO_ASSIGNMENT");
+                });
+        verify(tripRepository, never()).save(any());
+    }
+
+    @Test
+    void shouldArriveTrip_WithDriverNotAssigned_ThrowForbidden() {
+        // Given
+        authenticate("other.driver@test.com", "DRIVER");
+        trip.setStatus(Trip.TripStatus.DEPARTED);
+        assignment.setDriver(User.builder().id(5L).email("driver@test.com").build());
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+        when(assignmentRepository.findByTripId(1L)).thenReturn(Optional.of(assignment));
+
+        // When/Then
+        assertThatThrownBy(() -> boardingService.arriveTrip(1L))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    BusinessException be = (BusinessException) ex;
+                    assertThat(be.getStatus()).isEqualTo(HttpStatus.FORBIDDEN);
+                    assertThat(be.getCode()).isEqualTo("DRIVER_NOT_ASSIGNED");
+                });
+        assertThat(trip.getStatus()).isEqualTo(Trip.TripStatus.DEPARTED);
+        assertThat(trip.getArrivedAt()).isNull();
+        verify(tripRepository, never()).save(any());
+    }
+
+    @Test
+    void shouldArriveTrip_WithAssignedDriver_SetArrivedStatusAndTime() {
+        // Given
+        authenticate("driver@test.com", "DRIVER");
+        trip.setStatus(Trip.TripStatus.DEPARTED);
+        assignment.setDriver(User.builder().id(5L).email("driver@test.com").build());
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+        when(assignmentRepository.findByTripId(1L)).thenReturn(Optional.of(assignment));
+        when(tripRepository.save(trip)).thenReturn(trip);
+        when(tripMapper.toResponse(trip)).thenReturn(tripResponse);
+        LocalDateTime before = LocalDateTime.now();
+
+        // When
+        TripResponse result = boardingService.arriveTrip(1L);
+
+        // Then
+        assertThat(result).isSameAs(tripResponse);
+        verify(tripRepository).save(argThat(t -> t.getStatus() == Trip.TripStatus.ARRIVED));
+        assertThat(trip.getArrivedAt()).isNotNull().isBetween(before, LocalDateTime.now());
+        verifyNoInteractions(ticketRepository, configService);
+    }
+
+    @Test
+    void shouldArriveTrip_WithoutAuthentication_NotRequireDriverAssignment() {
+        // Given: sin usuario autenticado (p. ej. proceso interno) no aplica la restricción de DRIVER
+        trip.setStatus(Trip.TripStatus.DEPARTED);
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+        when(assignmentRepository.findByTripId(1L)).thenReturn(Optional.of(assignment));
+        when(tripRepository.save(trip)).thenReturn(trip);
+        when(tripMapper.toResponse(trip)).thenReturn(tripResponse);
+
+        // When
+        boardingService.arriveTrip(1L);
+
+        // Then
+        assertThat(trip.getStatus()).isEqualTo(Trip.TripStatus.ARRIVED);
+        assertThat(trip.getArrivedAt()).isNotNull();
     }
 }
 
