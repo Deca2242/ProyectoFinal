@@ -149,10 +149,11 @@ class AdditionalQueriesRepositoryTest extends BaseRepositoryTest {
     }
 
     @Test
-    @DisplayName("findUnboardedTicketsDepartingBetween: solo SOLD sin abordar, desde la primera parada y en la ventana")
+    @DisplayName("findUnboardedTicketsDepartingBetween: solo SOLD sin abordar, de la primera parada, viaje en abordaje y en la ventana")
     void ticket_findUnboardedTicketsDepartingBetween() {
         LocalDateTime now = LocalDateTime.now();
         trip.setDepartureTime(now.plusMinutes(3));
+        trip.setStatus(Trip.TripStatus.BOARDING);
         Ticket unboarded = persistTicket(1, stopA, stopC, Ticket.TicketStatus.SOLD, Ticket.PaymentMethod.CASH, "20000");
         Ticket boarded = persistTicket(2, stopA, stopC, Ticket.TicketStatus.SOLD, Ticket.PaymentMethod.CASH, "20000");
         boarded.setBoardedAt(now.minusMinutes(10));
@@ -164,6 +165,11 @@ class AdditionalQueriesRepositoryTest extends BaseRepositoryTest {
                 .extracting(Ticket::getId).containsExactly(unboarded.getId());
         // Fuera de la ventana no se devuelve nada
         assertThat(ticketRepository.findUnboardedTicketsDepartingBetween(now, now.plusMinutes(1))).isEmpty();
+
+        // Si el abordaje no se abrió (viaje retrasado o sin despachar) no se marca a nadie
+        trip.setStatus(Trip.TripStatus.SCHEDULED);
+        em.flush();
+        assertThat(ticketRepository.findUnboardedTicketsDepartingBetween(now, now.plusMinutes(5))).isEmpty();
     }
 
     @Test
@@ -182,6 +188,82 @@ class AdditionalQueriesRepositoryTest extends BaseRepositoryTest {
                 day.atStartOfDay(), day.plusDays(1).atStartOfDay());
 
         assertThat(result).extracting(Ticket::getSeatNumber).containsExactly(1);
+    }
+
+    @Test
+    @DisplayName("findCashTicketsPurchasedBetween: efectivo comprado en el rango, en cualquier estado")
+    void ticket_findCashTicketsPurchasedBetween() {
+        LocalDate day = LocalDate.now();
+        persistTicket(1, Ticket.TicketStatus.SOLD, Ticket.PaymentMethod.CASH, day.atTime(9, 0));
+        persistTicket(2, Ticket.TicketStatus.SOLD, Ticket.PaymentMethod.CARD, day.atTime(9, 0));
+        persistTicket(3, Ticket.TicketStatus.CANCELLED, Ticket.PaymentMethod.CASH, day.atTime(10, 0));
+        persistTicket(4, Ticket.TicketStatus.NO_SHOW, Ticket.PaymentMethod.CASH, day.atTime(11, 0));
+        persistTicket(5, Ticket.TicketStatus.SOLD, Ticket.PaymentMethod.CASH, day.plusDays(1).atStartOfDay());
+        em.flush();
+
+        List<Ticket> result = ticketRepository.findCashTicketsPurchasedBetween(
+                day.atStartOfDay(), day.plusDays(1).atStartOfDay());
+
+        assertThat(result).extracting(Ticket::getSeatNumber).containsExactly(1, 3, 4);
+    }
+
+    @Test
+    @DisplayName("findCashTicketsCancelledBetween: efectivo cancelado en el rango (por fecha de cancelación)")
+    void ticket_findCashTicketsCancelledBetween() {
+        LocalDate day = LocalDate.now();
+        Ticket today = persistTicket(1, Ticket.TicketStatus.CANCELLED, Ticket.PaymentMethod.CASH, day.minusDays(3).atTime(9, 0));
+        today.setCancelledAt(day.atTime(12, 0));
+        Ticket yesterday = persistTicket(2, Ticket.TicketStatus.CANCELLED, Ticket.PaymentMethod.CASH, day.minusDays(3).atTime(9, 0));
+        yesterday.setCancelledAt(day.minusDays(1).atTime(12, 0));
+        Ticket card = persistTicket(3, Ticket.TicketStatus.CANCELLED, Ticket.PaymentMethod.CARD, day.minusDays(3).atTime(9, 0));
+        card.setCancelledAt(day.atTime(12, 0));
+        em.flush();
+
+        assertThat(ticketRepository.findCashTicketsCancelledBetween(day.atStartOfDay(), day.plusDays(1).atStartOfDay()))
+                .extracting(Ticket::getSeatNumber).containsExactly(1);
+    }
+
+    @Test
+    @DisplayName("countSoldSeatsForSegment: sillas distintas vendidas que se solapan con el tramo")
+    void ticket_countSoldSeatsForSegment() {
+        persistTicket(1, stopA, stopB, Ticket.TicketStatus.SOLD, Ticket.PaymentMethod.CASH, "20000");
+        persistTicket(2, stopA, stopC, Ticket.TicketStatus.SOLD, Ticket.PaymentMethod.CASH, "40000");
+        persistTicket(3, stopB, stopC, Ticket.TicketStatus.CANCELLED, Ticket.PaymentMethod.CASH, "20000");
+        em.flush();
+
+        // A -> B: sillas 1 y 2; B -> C: solo la 2 (la 3 está cancelada y la 1 baja en B)
+        assertThat(ticketRepository.countSoldSeatsForSegment(trip.getId(), 1, 2)).isEqualTo(2L);
+        assertThat(ticketRepository.countSoldSeatsForSegment(trip.getId(), 2, 3)).isEqualTo(1L);
+    }
+
+    @Test
+    @DisplayName("findUnboardedOriginTickets: vendidos sin abordar que suben en la primera parada")
+    void ticket_findUnboardedOriginTickets() {
+        Ticket unboarded = persistTicket(1, stopA, stopC, Ticket.TicketStatus.SOLD, Ticket.PaymentMethod.CASH, "20000");
+        Ticket boarded = persistTicket(2, stopA, stopC, Ticket.TicketStatus.SOLD, Ticket.PaymentMethod.CASH, "20000");
+        boarded.setBoardedAt(LocalDateTime.now());
+        persistTicket(3, stopB, stopC, Ticket.TicketStatus.SOLD, Ticket.PaymentMethod.CASH, "20000");
+        em.flush();
+
+        assertThat(ticketRepository.findUnboardedOriginTickets(trip.getId()))
+                .extracting(Ticket::getId).containsExactly(unboarded.getId());
+    }
+
+    @Test
+    @DisplayName("findByTripDateBetween: tickets de viajes en el rango de fechas")
+    void ticket_findByTripDateBetween() {
+        persistTicket(1, stopA, stopC, Ticket.TicketStatus.SOLD, Ticket.PaymentMethod.CASH, "20000");
+        em.flush();
+
+        assertThat(ticketRepository.findByTripDateBetween(tripDate, tripDate)).hasSize(1);
+        assertThat(ticketRepository.findByTripDateBetween(tripDate.plusDays(1), tripDate.plusDays(2))).isEmpty();
+    }
+
+    @Test
+    @DisplayName("lockById: bloquea y devuelve el id del viaje (vacío si no existe)")
+    void trip_lockById() {
+        assertThat(tripRepository.lockById(trip.getId())).contains(trip.getId());
+        assertThat(tripRepository.lockById(-1L)).isEmpty();
     }
 
     @Test

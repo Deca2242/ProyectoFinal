@@ -228,7 +228,8 @@ class PassengerTripFlowTest {
         mvc.perform(post("/api/v1/trips/1/tickets")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(om.writeValueAsString(request)))
-                .andExpect(status().isBadRequest())
+                // 403: "política de overbooking" según la tabla de errores estándar del proyecto
+                .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("overbooking")));
     }
 }

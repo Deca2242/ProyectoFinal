@@ -134,7 +134,7 @@ class ParcelServiceImplTest {
             p.setId(1L);
             return p;
         });
-        when(parcelMapper.toResponse(any(Parcel.class))).thenReturn(parcelResponse);
+        when(parcelMapper.toResponseWithOtp(any(Parcel.class))).thenReturn(parcelResponse);
 
         // When
         ParcelResponse result = parcelService.createParcel(request);
@@ -386,7 +386,7 @@ class ParcelServiceImplTest {
         when(otpGenerator.generate6DigitOtp()).thenReturn("987654");
         when(parcelMapper.toEntity(request)).thenReturn(mapped);
         when(parcelRepository.save(any(Parcel.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(parcelMapper.toResponse(any(Parcel.class))).thenReturn(parcelResponse);
+        when(parcelMapper.toResponseWithOtp(any(Parcel.class))).thenReturn(parcelResponse);
 
         // When
         parcelService.createParcel(request);
@@ -435,9 +435,7 @@ class ParcelServiceImplTest {
     @ParameterizedTest
     @CsvSource({
             "CREATED, IN_TRANSIT",
-            "CREATED, FAILED",
-            "IN_TRANSIT, FAILED",
-            "FAILED, IN_TRANSIT"
+            "IN_TRANSIT, FAILED"
     })
     void shouldUpdateStatus_WithAllowedTransition_SaveNewStatus(Parcel.ParcelStatus current,
                                                                Parcel.ParcelStatus target) {
@@ -458,9 +456,11 @@ class ParcelServiceImplTest {
     @ParameterizedTest
     @CsvSource({
             "CREATED, CREATED",
+            "CREATED, FAILED",
             "IN_TRANSIT, CREATED",
             "IN_TRANSIT, IN_TRANSIT",
             "FAILED, CREATED",
+            "FAILED, IN_TRANSIT",
             "FAILED, FAILED",
             "DELIVERED, CREATED",
             "DELIVERED, IN_TRANSIT",

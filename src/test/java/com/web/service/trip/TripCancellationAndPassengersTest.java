@@ -134,13 +134,14 @@ class TripCancellationAndPassengersTest {
     }
 
     @Test
-    void shouldUpdateTripStatus_ToBoarding_NotTouchTickets() {
+    void shouldUpdateTripStatus_ToArrived_NotTouchTickets() {
         // Given
+        trip.setStatus(Trip.TripStatus.DEPARTED);
         when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
         when(tripRepository.save(trip)).thenReturn(trip);
 
         // When
-        tripService.updateTripStatus(1L, Trip.TripStatus.BOARDING);
+        tripService.updateTripStatus(1L, Trip.TripStatus.ARRIVED);
 
         // Then
         verifyNoInteractions(ticketRepository, seatHoldRepository);

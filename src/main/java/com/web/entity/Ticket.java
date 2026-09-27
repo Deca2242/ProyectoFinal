@@ -61,6 +61,23 @@ public class Ticket {
     @Column(name = "boarded_at")
     private LocalDateTime boardedAt;
 
+    // Reembolso entregado al cancelar y momento de la cancelación (cierre de caja)
+    @Column(name = "refund_amount", precision = 10, scale = 2)
+    private BigDecimal refundAmount;
+
+    @Column(name = "cancelled_at")
+    private LocalDateTime cancelledAt;
+
+    // Fee cobrado cuando el pasajero no aborda (regla de no-show)
+    @Column(name = "no_show_fee", precision = 10, scale = 2)
+    private BigDecimal noShowFee;
+
+    // Canal de venta: taquilla o app (métricas de ventas por canal)
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 20)
+    @Builder.Default
+    private SalesChannel channel = SalesChannel.APP;
+
     // Relación one-to-one con Baggage
     @OneToOne(mappedBy = "ticket", cascade = CascadeType.ALL, orphanRemoval = true)
     private Baggage baggage;
@@ -70,6 +87,11 @@ public class Ticket {
         TRANSFER,
         QR,
         CARD
+    }
+
+    public enum SalesChannel {
+        APP,
+        BOX_OFFICE
     }
 
     public enum TicketStatus {

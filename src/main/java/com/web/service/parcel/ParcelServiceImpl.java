@@ -56,6 +56,12 @@ public class ParcelServiceImpl implements ParcelService {
         Trip trip = tripRepository.findById(request.tripId())
                 .orElseThrow(() -> new ResourceNotFoundException("Viaje", request.tripId()));
 
+        // Solo se aceptan encomiendas para viajes que aún no han salido
+        if (trip.getStatus() != Trip.TripStatus.SCHEDULED && trip.getStatus() != Trip.TripStatus.BOARDING) {
+            throw new BusinessException("El viaje no admite encomiendas (estado: " + trip.getStatus() + ")",
+                    HttpStatus.BAD_REQUEST, "TRIP_NOT_AVAILABLE");
+        }
+
         // Validar paradas de origen y destino
         Stop fromStop = stopRepository.findById(request.fromStopId())
                 .orElseThrow(() -> new ResourceNotFoundException("Parada origen", request.fromStopId()));
@@ -87,7 +93,8 @@ public class ParcelServiceImpl implements ParcelService {
 
 
 
-        return parcelMapper.toResponse(savedParcel);
+        // La taquilla recibe el OTP para entregárselo al destinatario; ninguna otra respuesta lo incluye
+        return parcelMapper.toResponseWithOtp(savedParcel);
     }
 
 
@@ -185,13 +192,14 @@ public class ParcelServiceImpl implements ParcelService {
         return parcelMapper.toResponseList(parcels);
     }
 
-    // CREATED → IN_TRANSIT | FAILED, IN_TRANSIT → FAILED, FAILED → IN_TRANSIT (reintento). DELIVERED es final.
+    // Máquina de estados del documento: CREATED → IN_TRANSIT (abordo del bus) → DELIVERED (OTP + foto)
+    // o FAILED (OTP incorrecto / destinatario ausente). DELIVERED y FAILED son finales: sin reintentos
+    // no se puede probar el OTP por fuerza bruta
     private boolean isValidStatusTransition(Parcel.ParcelStatus current, Parcel.ParcelStatus target) {
         return switch (current) {
-            case CREATED -> target == Parcel.ParcelStatus.IN_TRANSIT || target == Parcel.ParcelStatus.FAILED;
+            case CREATED -> target == Parcel.ParcelStatus.IN_TRANSIT;
             case IN_TRANSIT -> target == Parcel.ParcelStatus.FAILED;
-            case FAILED -> target == Parcel.ParcelStatus.IN_TRANSIT;
-            case DELIVERED -> false;
+            case FAILED, DELIVERED -> false;
         };
     }
 }

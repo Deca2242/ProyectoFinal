@@ -9,6 +9,8 @@ public record ParcelMetrics(
                 Integer delivered,
                 Integer failed,
                 Double deliverySuccessRate,
-                Map<String, Integer> parcelsByRoute // paquetes por ruta
+                Map<String, Integer> parcelsByRoute, // paquetes por ruta
+                Map<String, Integer> deliveredBySegment, // entregadas por tramo "Origen → Destino"
+                Map<String, Integer> failedBySegment // fallidas por tramo
 ) implements Serializable {
 }

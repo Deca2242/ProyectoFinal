@@ -133,4 +133,9 @@ public interface TripRepository extends JpaRepository<Trip, Long> {
                 AND t.status <> 'CANCELLED'
             """)
     List<Long> findBusIdsWithTripsOnDate(@Param("date") LocalDate date);
+
+    // Bloquea la fila del viaje (SELECT ... FOR UPDATE) hasta el fin de la transacción:
+    // serializa ventas, holds y aprobaciones de overbooking del mismo viaje para evitar doble venta
+    @Query(value = "SELECT id FROM trips WHERE id = :id FOR UPDATE", nativeQuery = true)
+    Optional<Long> lockById(@Param("id") Long id);
 }

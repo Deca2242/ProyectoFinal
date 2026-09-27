@@ -156,7 +156,6 @@ class TicketServiceImplTest {
                 BigDecimal.valueOf(50000), Ticket.PaymentMethod.CASH, null, "ADULT"
         );
 
-        when(configService.getConfig()).thenReturn(createConfigResponse(new HashMap<>()));
         when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
         when(userRepository.findById(1L)).thenReturn(Optional.of(passenger));
         when(stopRepository.findById(1L)).thenReturn(Optional.of(fromStop));
@@ -170,8 +169,7 @@ class TicketServiceImplTest {
         lenient().when(configService.getTicketPriceMultiplierHighDemand()).thenReturn(BigDecimal.ONE);
         lenient().when(configService.getTicketPriceMultiplierMediumDemand()).thenReturn(BigDecimal.ONE);
         lenient().when(configService.getTicketPriceMultiplierPeakHours()).thenReturn(BigDecimal.ONE);
-        when(ticketRepository.countSoldSeats(1L)).thenReturn(20L);
-        when(configService.getOverbookingMaxPercentage()).thenReturn(0.05);
+        when(ticketRepository.countSoldSeatsForSegment(1L, 1, 2)).thenReturn(20L);
         when(ticketMapper.toEntity(request)).thenReturn(ticket);
         when(qrCodeGenerator.generateTicketQr()).thenReturn("QR123");
         when(ticketRepository.save(any(Ticket.class))).thenAnswer(inv -> {
@@ -216,8 +214,7 @@ class TicketServiceImplTest {
         lenient().when(configService.getTicketPriceMultiplierHighDemand()).thenReturn(BigDecimal.ONE);
         lenient().when(configService.getTicketPriceMultiplierMediumDemand()).thenReturn(BigDecimal.ONE);
         lenient().when(configService.getTicketPriceMultiplierPeakHours()).thenReturn(BigDecimal.ONE);
-        when(ticketRepository.countSoldSeats(1L)).thenReturn(20L);
-        when(configService.getOverbookingMaxPercentage()).thenReturn(0.05);
+        when(ticketRepository.countSoldSeatsForSegment(1L, 1, 2)).thenReturn(20L);
         when(configService.getConfig()).thenReturn(createConfigResponse(discounts));
         when(ticketMapper.toEntity(request)).thenReturn(ticket);
         when(qrCodeGenerator.generateTicketQr()).thenReturn("QR123");
@@ -263,8 +260,7 @@ class TicketServiceImplTest {
         lenient().when(configService.getTicketPriceMultiplierHighDemand()).thenReturn(BigDecimal.ONE);
         lenient().when(configService.getTicketPriceMultiplierMediumDemand()).thenReturn(BigDecimal.ONE);
         lenient().when(configService.getTicketPriceMultiplierPeakHours()).thenReturn(BigDecimal.ONE);
-        when(ticketRepository.countSoldSeats(1L)).thenReturn(20L);
-        when(configService.getOverbookingMaxPercentage()).thenReturn(0.05);
+        when(ticketRepository.countSoldSeatsForSegment(1L, 1, 2)).thenReturn(20L);
         when(configService.getConfig()).thenReturn(createConfigResponse(discounts));
         when(ticketMapper.toEntity(request)).thenReturn(ticket);
         when(qrCodeGenerator.generateTicketQr()).thenReturn("QR123");
@@ -310,8 +306,7 @@ class TicketServiceImplTest {
         lenient().when(configService.getTicketPriceMultiplierHighDemand()).thenReturn(BigDecimal.ONE);
         lenient().when(configService.getTicketPriceMultiplierMediumDemand()).thenReturn(BigDecimal.ONE);
         lenient().when(configService.getTicketPriceMultiplierPeakHours()).thenReturn(BigDecimal.ONE);
-        when(ticketRepository.countSoldSeats(1L)).thenReturn(20L);
-        when(configService.getOverbookingMaxPercentage()).thenReturn(0.05);
+        when(ticketRepository.countSoldSeatsForSegment(1L, 1, 2)).thenReturn(20L);
         when(configService.getConfig()).thenReturn(createConfigResponse(discounts));
         when(ticketMapper.toEntity(request)).thenReturn(ticket);
         when(qrCodeGenerator.generateTicketQr()).thenReturn("QR123");
@@ -335,9 +330,9 @@ class TicketServiceImplTest {
 
     @Test
     void shouldPurchaseTicket_WithOverbookingExceeded_ThrowException() {
-        // Given
+        // Given: la silla 41 supera la capacidad (40) y no hay sillas de overbooking aprobadas
         TicketCreateRequest request = new TicketCreateRequest(
-                1L, 1L, 10, 1L, "Bogotá", 1, 2L, "Medellín", 2,
+                1L, 1L, 41, 1L, "Bogotá", 1, 2L, "Medellín", 2,
                 BigDecimal.valueOf(50000), Ticket.PaymentMethod.CASH, null, "ADULT"
         );
 
@@ -345,11 +340,9 @@ class TicketServiceImplTest {
         when(userRepository.findById(1L)).thenReturn(Optional.of(passenger));
         when(stopRepository.findById(1L)).thenReturn(Optional.of(fromStop));
         when(stopRepository.findById(2L)).thenReturn(Optional.of(toStop));
-        when(seatHoldRepository.findOverlappingActiveHolds(eq(1L), eq(10), anyInt(), anyInt(), any(LocalDateTime.class)))
+        when(seatHoldRepository.findOverlappingActiveHolds(eq(1L), eq(41), anyInt(), anyInt(), any(LocalDateTime.class)))
                 .thenReturn(List.of());
-        when(ticketRepository.isSeatAvailableForSegment(1L, 10, 1, 2)).thenReturn(true);
-        when(ticketRepository.countSoldSeats(1L)).thenReturn(42L); // 42/40 = 105% occupancy
-        when(configService.getOverbookingMaxPercentage()).thenReturn(0.05); // Max 5% overbooking
+        when(ticketRepository.isSeatAvailableForSegment(1L, 41, 1, 2)).thenReturn(true);
 
         // When/Then
         assertThatThrownBy(() -> ticketService.purchaseTicket(request))
@@ -524,7 +517,7 @@ class TicketServiceImplTest {
     }
 
     @ParameterizedTest
-    @EnumSource(value = Trip.TripStatus.class, names = {"BOARDING", "DEPARTED", "ARRIVED", "CANCELLED"})
+    @EnumSource(value = Trip.TripStatus.class, names = {"DEPARTED", "ARRIVED", "CANCELLED"})
     void shouldPurchaseTicket_WithTripNotScheduled_ThrowInvalidSegment(Trip.TripStatus status) {
         // Given
         trip.setStatus(status);
@@ -688,39 +681,36 @@ class TicketServiceImplTest {
                 .hasMessageContaining("tramo seleccionado");
         verify(ticketRepository).isSeatAvailableForSegment(1L, 10, 2, 5);
         verify(ticketRepository, never()).isSeatAvailableForSegment(1L, 10, 7, 9);
-        verify(ticketRepository, never()).countSoldSeats(anyLong());
+        verify(ticketRepository, never()).countSoldSeatsForSegment(anyLong(), anyInt(), anyInt());
     }
 
     // ==================== purchaseTicket: overbooking y número de asiento ====================
 
     @Test
-    void shouldPurchaseTicket_WithOverbookingLimitReached_ThrowBadRequestBeforeSeatValidation() {
-        // Given: 42/40 = 105% alcanza el límite de 5% y el asiento 999 tampoco existe
+    void shouldPurchaseTicket_WithSeatAboveApprovedOverbooking_ThrowForbidden() {
+        // Given: dos sillas aprobadas (41 y 42); la 999 supera la capacidad más lo aprobado
+        trip.setOverbookingApprovedSeats(2);
         TicketCreateRequest request = buildRequest(999, null, null);
         stubEntitiesFound();
         stubSeatFree(999);
-        when(ticketRepository.countSoldSeats(1L)).thenReturn(42L);
-        when(configService.getOverbookingMaxPercentage()).thenReturn(0.05);
 
-        // When/Then: el overbooking se valida antes que el número de asiento
+        // When/Then: 403 por política de overbooking (tabla de errores estándar)
         assertThatThrownBy(() -> ticketService.purchaseTicket(request))
                 .isInstanceOf(OverbookingNotAllowedException.class)
                 .satisfies(ex -> {
                     BusinessException be = (BusinessException) ex;
-                    assertThat(be.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+                    assertThat(be.getStatus()).isEqualTo(HttpStatus.FORBIDDEN);
                     assertThat(be.getCode()).isEqualTo("OVERBOOKING_NOT_ALLOWED");
                 });
         verify(ticketRepository, never()).save(any());
     }
 
     @Test
-    void shouldPurchaseTicket_WithoutOverbookingAllowedAndBusFull_ThrowOverbooking() {
-        // Given: 0% de overbooking y 40/40 vendidos
-        TicketCreateRequest request = buildRequest(10, null, null);
+    void shouldPurchaseTicket_WithoutOverbookingApprovalAndBusFull_ThrowOverbooking() {
+        // Given: bus lleno y ninguna silla extra aprobada por el DISPATCHER
+        TicketCreateRequest request = buildRequest(41, null, null);
         stubEntitiesFound();
-        stubSeatFree(10);
-        when(ticketRepository.countSoldSeats(1L)).thenReturn(40L);
-        when(configService.getOverbookingMaxPercentage()).thenReturn(0.0);
+        stubSeatFree(41);
 
         // When/Then
         assertThatThrownBy(() -> ticketService.purchaseTicket(request))
@@ -729,8 +719,9 @@ class TicketServiceImplTest {
     }
 
     @Test
-    void shouldPurchaseTicket_WithOccupancyBelowOverbookingLimit_AllowLastOverbookedSeat() {
-        // Given: 41/40 = 102.5% < 105% y el asiento 42 = 40 + floor(40 * 0.05)
+    void shouldPurchaseTicket_WithApprovedOverbookingSeats_AllowLastOverbookedSeat() {
+        // Given: el DISPATCHER aprobó 2 sillas extra (41 y 42)
+        trip.setOverbookingApprovedSeats(2);
         TicketCreateRequest request = buildRequest(42, null, null);
         stubEntitiesFound();
         stubSeatFree(42);
@@ -748,9 +739,9 @@ class TicketServiceImplTest {
     }
 
     @ParameterizedTest
-    @ValueSource(ints = {-1, 0, 43, 100})
+    @ValueSource(ints = {-1, 0})
     void shouldPurchaseTicket_WithSeatNumberOutOfRange_ThrowSeatNotAvailable(int seatNumber) {
-        // Given: capacidad 40 y 5% de overbooking => asientos válidos 1..42
+        // Given: los números de silla empiezan en 1
         TicketCreateRequest request = buildRequest(seatNumber, null, null);
         stubEntitiesFound();
         stubSeatFree(seatNumber);
@@ -767,7 +758,8 @@ class TicketServiceImplTest {
     @ParameterizedTest
     @ValueSource(ints = {1, 40, 41, 42})
     void shouldPurchaseTicket_WithSeatNumberInsideRange_Succeed(int seatNumber) {
-        // Given
+        // Given: capacidad 40 y 2 sillas de overbooking aprobadas => sillas válidas 1..42
+        trip.setOverbookingApprovedSeats(2);
         TicketCreateRequest request = buildRequest(seatNumber, null, null);
         stubEntitiesFound();
         stubSeatFree(seatNumber);
@@ -784,9 +776,10 @@ class TicketServiceImplTest {
     }
 
     @Test
-    void shouldPurchaseTicket_WithFloatingPointOverbookingMargin_AllowLastSeat() {
-        // Given: 100 * 0.29 = 28.999999999999996 en double; el máximo debe ser 129
+    void shouldPurchaseTicket_WithManyApprovedSeats_AllowLastSeat() {
+        // Given: capacidad 100 y 29 sillas aprobadas => la 129 es válida
         bus.setCapacity(100);
+        trip.setOverbookingApprovedSeats(29);
         TicketCreateRequest request = buildRequest(129, null, null);
         stubEntitiesFound();
         stubSeatFree(129);
@@ -802,18 +795,18 @@ class TicketServiceImplTest {
     }
 
     @Test
-    void shouldPurchaseTicket_WithSeatBeyondFloatingPointOverbookingMargin_ThrowSeatNotAvailable() {
-        // Given
+    void shouldPurchaseTicket_WithSeatBeyondApprovedSeats_ThrowOverbooking() {
+        // Given: capacidad 100 y 29 sillas aprobadas => la 130 no se puede vender
         bus.setCapacity(100);
+        trip.setOverbookingApprovedSeats(29);
         TicketCreateRequest request = buildRequest(130, null, null);
         stubEntitiesFound();
         stubSeatFree(130);
-        stubOverbookingCheck(20L, 0.29);
 
         // When/Then
         assertThatThrownBy(() -> ticketService.purchaseTicket(request))
-                .isInstanceOf(SeatNotAvailableException.class)
-                .hasMessageContaining("capacidad: 100");
+                .isInstanceOf(OverbookingNotAllowedException.class)
+                .hasMessageContaining("capacidad del bus (100)");
     }
 
     // ==================== purchaseTicket: cálculo de precio ====================
@@ -990,21 +983,20 @@ class TicketServiceImplTest {
     }
 
     @Test
-    void shouldPurchaseTicket_WithUnknownPassengerType_NotApplyDiscount() {
-        // Given
+    void shouldPurchaseTicket_WithUnknownPassengerType_ThrowInvalidPassengerType() {
+        // Given: "VIP" no es una tarifa especial (niño / estudiante / adulto mayor)
         TicketCreateRequest request = buildRequest(10, "VIP", null);
         stubEntitiesFound();
         stubSeatFree(10);
         stubOverbookingCheck(20L, 0.05);
         stubConfigBasePrice(BigDecimal.valueOf(50000));
         when(configService.getConfig()).thenReturn(createConfigResponse(Map.of("STUDENT", 20)));
-        stubTicketPersistence(request);
 
-        // When
-        ticketService.purchaseTicket(request);
-
-        // Then
-        verify(ticketRepository).save(argThat(t -> t.getPrice().compareTo(BigDecimal.valueOf(50000)) == 0));
+        // When/Then
+        assertThatThrownBy(() -> ticketService.purchaseTicket(request))
+                .isInstanceOf(BusinessException.class)
+                .extracting("code").isEqualTo("INVALID_PASSENGER_TYPE");
+        verify(ticketRepository, never()).save(any());
     }
 
     @Test
@@ -1306,9 +1298,10 @@ class TicketServiceImplTest {
                 .thenReturn(true);
     }
 
+    // Ocupación del tramo usada por el precio dinámico (el overbooking ya no depende del porcentaje en la compra:
+    // lo limitan las sillas aprobadas por el DISPATCHER). lenient: las ventas rechazadas antes del precio no la consultan
     private void stubOverbookingCheck(long soldSeats, double overbookingMaxPercentage) {
-        when(ticketRepository.countSoldSeats(1L)).thenReturn(soldSeats);
-        when(configService.getOverbookingMaxPercentage()).thenReturn(overbookingMaxPercentage);
+        lenient().when(ticketRepository.countSoldSeatsForSegment(eq(1L), anyInt(), anyInt())).thenReturn(soldSeats);
     }
 
     private void stubConfigBasePrice(BigDecimal basePrice) {

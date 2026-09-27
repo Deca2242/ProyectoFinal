@@ -11,6 +11,7 @@ import com.web.entity.Stop;
 import com.web.entity.Ticket;
 import com.web.entity.Trip;
 import com.web.exception.BusinessException;
+import com.web.exception.InvalidStateTransitionException;
 import com.web.exception.ResourceNotFoundException;
 import com.web.repository.BusRepository;
 import com.web.repository.RouteRepository;
@@ -503,9 +504,7 @@ class TripServiceImplTest {
 
     @ParameterizedTest
     @CsvSource({
-            "SCHEDULED, BOARDING",
             "SCHEDULED, CANCELLED",
-            "BOARDING, DEPARTED",
             "BOARDING, CANCELLED",
             "DEPARTED, ARRIVED"
     })
@@ -547,14 +546,15 @@ class TripServiceImplTest {
         trip.setStatus(current);
         when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
 
-        // When/Then
+        // When/Then: 422 según la tabla de errores estándar
         assertThatThrownBy(() -> tripService.updateTripStatus(1L, target))
                 .isInstanceOf(BusinessException.class)
-                .hasMessageContaining(current + " -> " + target)
+                .hasMessageContaining("'" + current + "'")
+                .hasMessageContaining("'" + target + "'")
                 .satisfies(ex -> {
                     BusinessException be = (BusinessException) ex;
                     assertThat(be.getCode()).isEqualTo("INVALID_STATE_TRANSITION");
-                    assertThat(be.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+                    assertThat(be.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
                 });
         assertThat(trip.getStatus()).isEqualTo(current);
         verify(tripRepository, never()).save(any());
@@ -585,13 +585,45 @@ class TripServiceImplTest {
         when(tripMapper.toResponse(any(Trip.class))).thenReturn(tripResponse);
 
         // When
-        TripResponse result = tripService.updateTripStatus(1L, Trip.TripStatus.BOARDING);
+        TripResponse result = tripService.updateTripStatus(1L, Trip.TripStatus.CANCELLED);
 
         // Then
         assertThat(result).isNotNull();
-        verify(tripRepository).save(argThat(t -> 
-            t.getStatus() == Trip.TripStatus.BOARDING
+        verify(tripRepository).save(argThat(t ->
+            t.getStatus() == Trip.TripStatus.CANCELLED
         ));
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+            "SCHEDULED, BOARDING",
+            "BOARDING, DEPARTED"
+    })
+    void shouldUpdateTripStatus_ToBoardingOrDeparted_RequireDispatchEndpoints(Trip.TripStatus current,
+                                                                              Trip.TripStatus target) {
+        // Given: son transiciones válidas, pero con validaciones propias (asignación, checklist, no-show)
+        trip.setStatus(current);
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+
+        // When/Then
+        assertThatThrownBy(() -> tripService.updateTripStatus(1L, target))
+                .isInstanceOf(InvalidStateTransitionException.class)
+                .hasMessageContaining("despacho");
+        verify(tripRepository, never()).save(any());
+    }
+
+    @Test
+    void shouldUpdateTripStatus_ToArrived_SetArrivedAt() {
+        // Given
+        trip.setStatus(Trip.TripStatus.DEPARTED);
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+        when(tripRepository.save(any(Trip.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        // When
+        tripService.updateTripStatus(1L, Trip.TripStatus.ARRIVED);
+
+        // Then
+        assertThat(trip.getArrivedAt()).isNotNull();
     }
 
     @Test

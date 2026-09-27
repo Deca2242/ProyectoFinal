@@ -53,35 +53,48 @@ public class PaymentServiceImpl implements PaymentService {
 
 
 
-    // calcula el total esperado de tickets en efectivo y compara con el monto real reportado
+    // Calcula el efectivo esperado del día y lo compara con el monto real reportado:
+    //  + tickets en efectivo vendidos ese día (en cualquier estado: el dinero se recibió al vender)
+    //  + cargos por exceso de equipaje de esos tickets
+    //  - reembolsos de tickets en efectivo cancelados ese día
     @Override
     @Transactional(readOnly = true)
     public CashCloseResponse closeCash(CashCloseRequest request, Long userId) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Usuario", userId));
 
-        // Total esperado = tickets vendidos en efectivo durante el día indicado (según fecha de compra)
         LocalDateTime startOfDay = request.date().atStartOfDay();
         LocalDateTime endOfDay = request.date().plusDays(1).atStartOfDay();
-        List<Ticket> cashTickets = ticketRepository.findSoldCashTicketsPurchasedBetween(startOfDay, endOfDay);
+        List<Ticket> soldTickets = ticketRepository.findCashTicketsPurchasedBetween(startOfDay, endOfDay);
+        List<Ticket> cancelledTickets = ticketRepository.findCashTicketsCancelledBetween(startOfDay, endOfDay);
 
-        BigDecimal totalCash = cashTickets.stream()
-                .map(Ticket::getPrice)
+        BigDecimal sales = soldTickets.stream()
+                .map(t -> t.getPrice().add(excessFee(t)))
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal refunds = cancelledTickets.stream()
+                .map(t -> t.getRefundAmount() == null ? BigDecimal.ZERO : t.getRefundAmount())
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal expectedCash = sales.subtract(refunds);
 
-        int ticketCount = cashTickets.size();
         // Diferencia positiva = sobrante en caja, negativa = faltante
-        BigDecimal difference = request.actualAmount().subtract(totalCash);
+        BigDecimal difference = request.actualAmount().subtract(expectedCash);
 
         return new CashCloseResponse(
                 userId,
                 user.getName(),
                 request.date(),
-                totalCash,
+                expectedCash,
                 request.actualAmount(),
                 difference,
-                ticketCount,
+                soldTickets.size(),
                 LocalDateTime.now()
         );
+    }
+
+    private BigDecimal excessFee(Ticket ticket) {
+        if (ticket.getBaggage() == null || ticket.getBaggage().getExcessFee() == null) {
+            return BigDecimal.ZERO;
+        }
+        return ticket.getBaggage().getExcessFee();
     }
 }

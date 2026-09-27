@@ -15,13 +15,16 @@ import com.web.entity.Stop;
 import com.web.entity.Ticket;
 import com.web.entity.Trip;
 import com.web.exception.BusinessException;
+import com.web.exception.InvalidStateTransitionException;
 import com.web.exception.ResourceNotFoundException;
+import com.web.repository.AssignmentRepository;
 import com.web.repository.BusRepository;
 import com.web.repository.RouteRepository;
 import com.web.repository.SeatHoldRepository;
 import com.web.repository.StopRepository;
 import com.web.repository.TicketRepository;
 import com.web.repository.TripRepository;
+import com.web.util.SecurityUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -43,6 +46,7 @@ public class TripServiceImpl implements TripService {
         private final StopRepository stopRepository;
         private final TicketRepository ticketRepository;
         private final SeatHoldRepository seatHoldRepository;
+        private final AssignmentRepository assignmentRepository;
         private final TripMapper tripMapper;
         private final TicketMapper ticketMapper;
 
@@ -59,6 +63,23 @@ public class TripServiceImpl implements TripService {
                 if (bus.getStatus() != Bus.BusStatus.ACTIVE) {
                         throw new BusinessException("El bus no está disponible", HttpStatus.BAD_REQUEST,
                                         "BUS_NOT_AVAILABLE");
+                }
+
+                if (Boolean.FALSE.equals(route.getIsActive())) {
+                        throw new BusinessException("La ruta está inactiva", HttpStatus.BAD_REQUEST,
+                                        "ROUTE_INACTIVE");
+                }
+
+                if (!request.departureTime().toLocalDate().equals(request.tripDate())
+                                || !request.arrivalEta().isAfter(request.departureTime())) {
+                        throw new BusinessException(
+                                        "La fecha del viaje debe coincidir con la salida y la llegada debe ser posterior a la salida",
+                                        HttpStatus.BAD_REQUEST, "INVALID_DATES");
+                }
+
+                if (tripRepository.findBusIdsWithTripsOnDate(request.tripDate()).contains(bus.getId())) {
+                        throw new BusinessException("El bus ya tiene un viaje programado ese día",
+                                        HttpStatus.CONFLICT, "BUS_BUSY");
                 }
 
                 Trip trip = tripMapper.toEntity(request);
@@ -195,8 +216,19 @@ public class TripServiceImpl implements TripService {
 
                 validateStatusTransition(trip.getStatus(), status);
 
+                // Abrir abordaje y dar salida tienen sus propias validaciones (asignación, checklist,
+                // conductor, no-show): deben hacerse por los endpoints de despacho
+                if (status == Trip.TripStatus.BOARDING || status == Trip.TripStatus.DEPARTED) {
+                        throw new InvalidStateTransitionException(
+                                        "El estado " + status + " se asigna desde los endpoints de despacho (boarding/depart)");
+                }
+
                 if (status == Trip.TripStatus.CANCELLED) {
                         releaseTicketsAndHolds(trip);
+                }
+
+                if (status == Trip.TripStatus.ARRIVED) {
+                        trip.setArrivedAt(LocalDateTime.now());
                 }
 
                 trip.setStatus(status);
@@ -234,13 +266,16 @@ public class TripServiceImpl implements TripService {
         // Al cancelar un viaje se cancelan sus tickets vendidos (reembolso total, la cancelación es de la empresa)
         // y se liberan los holds activos
         private void releaseTicketsAndHolds(Trip trip) {
+                LocalDateTime now = LocalDateTime.now();
                 List<Ticket> soldTickets = ticketRepository.findByTripIdAndStatus(trip.getId(), Ticket.TicketStatus.SOLD);
                 for (Ticket ticket : soldTickets) {
                         ticket.setStatus(Ticket.TicketStatus.CANCELLED);
+                        ticket.setRefundAmount(ticket.getPrice());
+                        ticket.setCancelledAt(now);
                 }
                 ticketRepository.saveAll(soldTickets);
 
-                List<SeatHold> activeHolds = seatHoldRepository.findActiveHoldsByTrip(trip.getId(), LocalDateTime.now());
+                List<SeatHold> activeHolds = seatHoldRepository.findActiveHoldsByTrip(trip.getId(), now);
                 for (SeatHold hold : activeHolds) {
                         hold.setStatus(SeatHold.HoldStatus.EXPIRED);
                 }
@@ -253,6 +288,18 @@ public class TripServiceImpl implements TripService {
         public List<TicketResponse> getPassengersBySegment(Long tripId, Long fromStopId, Long toStopId) {
                 Trip trip = tripRepository.findById(tripId)
                                 .orElseThrow(() -> new ResourceNotFoundException("Viaje", tripId));
+
+                // Un conductor solo ve la lista de pasajeros de los viajes que tiene asignados
+                if (SecurityUtils.hasRole("DRIVER")) {
+                        String username = SecurityUtils.currentUsername().orElse("");
+                        boolean assigned = assignmentRepository.findByTripId(tripId)
+                                        .map(a -> a.getDriver() != null && username.equalsIgnoreCase(a.getDriver().getEmail()))
+                                        .orElse(false);
+                        if (!assigned) {
+                                throw new BusinessException("El conductor no está asignado a este viaje",
+                                                HttpStatus.FORBIDDEN, "DRIVER_NOT_ASSIGNED");
+                        }
+                }
 
                 Stop fromStop = stopRepository.findById(fromStopId)
                                 .orElseThrow(() -> new ResourceNotFoundException("Parada origen", fromStopId));
@@ -290,12 +337,9 @@ public class TripServiceImpl implements TripService {
                         case ARRIVED, CANCELLED -> false;
                 };
 
+                // 422 según la tabla de errores estándar (estado inválido para la transición)
                 if (!isValidTransition) {
-                        throw new BusinessException(
-                                        String.format("Transición de estado inválida: %s -> %s", currentStatus,
-                                                        newStatus),
-                                        HttpStatus.BAD_REQUEST,
-                                        "INVALID_STATE_TRANSITION");
+                        throw new InvalidStateTransitionException(currentStatus.name(), newStatus.name());
                 }
         }
 }

@@ -936,7 +936,7 @@ class MapperTest {
         Parcel parcel = buildParcel();
 
         // When
-        ParcelResponse response = parcelMapper.toResponse(parcel);
+        ParcelResponse response = parcelMapper.toResponseWithOtp(parcel);
 
         // Then
         assertThat(response.id()).isEqualTo(400L);
@@ -967,11 +967,16 @@ class MapperTest {
 
         // When
         ParcelResponse publicResponse = parcelMapper.toPublicResponse(parcel);
-        ParcelResponse internalResponse = parcelMapper.toResponse(parcel);
+        ParcelResponse internalResponse = parcelMapper.toResponseWithOtp(parcel);
 
         // Then
         assertThat(publicResponse.deliveryOtp()).isNull();
         assertThat(internalResponse.deliveryOtp()).isEqualTo("654321");
+        // El rastreo público tampoco expone datos personales de remitente y destinatario
+        assertThat(publicResponse.senderName()).isNull();
+        assertThat(publicResponse.senderPhone()).isNull();
+        assertThat(publicResponse.receiverName()).isNull();
+        assertThat(publicResponse.receiverPhone()).isNull();
         // El resto de la información se hereda de toResponse
         assertThat(publicResponse.id()).isEqualTo(400L);
         assertThat(publicResponse.code()).isEqualTo(parcel.getCode());
@@ -981,7 +986,7 @@ class MapperTest {
         assertThat(publicResponse.toStopName()).isEqualTo("Ciénaga");
         assertThat(publicResponse.status()).isEqualTo(Parcel.ParcelStatus.IN_TRANSIT);
         assertThat(publicResponse).usingRecursiveComparison()
-                .ignoringFields("deliveryOtp")
+                .ignoringFields("deliveryOtp", "senderName", "senderPhone", "receiverName", "receiverPhone")
                 .isEqualTo(internalResponse);
         // El OTP no debe aparecer ni siquiera en la representación textual del record
         assertThat(publicResponse.toString()).doesNotContain("654321");
@@ -996,9 +1001,10 @@ class MapperTest {
         // When
         List<ParcelResponse> responses = parcelMapper.toResponseList(List.of(parcel));
 
-        // Then: la lista es de uso interno y conserva el OTP (usa toResponse, no toPublicResponse)
+        // Then: la lista es para el personal: usa toResponse, que no incluye el OTP (solo lo conoce el destinatario)
         assertThat(responses).singleElement().satisfies(r -> {
-            assertThat(r.deliveryOtp()).isEqualTo("654321");
+            assertThat(r.deliveryOtp()).isNull();
+            assertThat(r.receiverPhone()).isEqualTo("3005555555");
             assertThat(r).isEqualTo(parcelMapper.toResponse(parcel));
         });
         assertThat(parcelMapper.toResponseList(null)).isNull();

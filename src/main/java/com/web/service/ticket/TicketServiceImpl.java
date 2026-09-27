@@ -14,6 +14,7 @@ import com.web.exception.SeatNotAvailableException;
 import com.web.repository.*;
 import com.web.service.admin.ConfigService;
 import com.web.util.QrCodeGenerator;
+import com.web.util.SecurityUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -26,6 +27,9 @@ import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Optional;
 
 
 @Service
@@ -43,6 +47,7 @@ public class TicketServiceImpl implements TicketService {
     private final SeatHoldService seatHoldService;
     private final QrCodeGenerator qrCodeGenerator;
     private final ConfigService configService;
+    private final AssignmentRepository assignmentRepository;
 
     // Compra un ticket validando disponibilidad, calculando precio con descuentos y generando QR
     @Override
@@ -50,12 +55,20 @@ public class TicketServiceImpl implements TicketService {
     public TicketResponse purchaseTicket(TicketCreateRequest request) {
         LocalDateTime now = LocalDateTime.now();
 
-        // Validar que el viaje existe y está en estado SCHEDULED
+        // Bloquear el viaje hasta el fin de la transacción: dos compras simultáneas del mismo viaje
+        // se atienden una tras otra, así la segunda ve el asiento ya vendido
+        tripRepository.lockById(request.tripId());
+
+        // Validar que el viaje existe y admite ventas (programado o en abordaje, y aún sin salir)
         Trip trip = tripRepository.findById(request.tripId())
                 .orElseThrow(() -> new ResourceNotFoundException("Viaje", request.tripId()));
 
-        if (trip.getStatus() != Trip.TripStatus.SCHEDULED) {
+        if (trip.getStatus() != Trip.TripStatus.SCHEDULED && trip.getStatus() != Trip.TripStatus.BOARDING) {
             throw new InvalidSegmentException("El viaje no está disponible para compra (estado: " + trip.getStatus() + ")");
+        }
+
+        if (!trip.getDepartureTime().isAfter(now)) {
+            throw new BusinessException("El viaje ya salió", HttpStatus.BAD_REQUEST, "TRIP_ALREADY_DEPARTED");
         }
 
         User passenger = userRepository.findById(request.passengerId())
@@ -98,10 +111,8 @@ public class TicketServiceImpl implements TicketService {
                     "El asiento " + request.seatNumber() + " no está disponible para el tramo seleccionado");
         }
 
-        // Validar que no se exceda el límite de overbooking configurado
-        validateOverbooking(trip);
-
-        // El número de asiento debe existir (o caer dentro del margen de sobreventa permitido)
+        // El número de asiento debe existir; las sillas por encima de la capacidad (overbooking)
+        // solo se venden si un DISPATCHER las aprobó para este viaje
         validateSeatNumber(trip, request.seatNumber());
 
         // Calcular precio final aplicando tarifas dinámicas y descuentos por tipo de pasajero
@@ -115,6 +126,7 @@ public class TicketServiceImpl implements TicketService {
         ticket.setToStop(toStop);
         ticket.setPrice(finalPrice);
         ticket.setQrCode(qrCodeGenerator.generateTicketQr());
+        ticket.setChannel(SecurityUtils.hasRole("CLERK") ? Ticket.SalesChannel.BOX_OFFICE : Ticket.SalesChannel.APP);
         ticket = ticketRepository.save(ticket);
 
         // Registrar equipaje si se solicitó, calculando cargo por exceso si supera el límite
@@ -189,6 +201,8 @@ public class TicketServiceImpl implements TicketService {
                 .divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
 
         ticket.setStatus(Ticket.TicketStatus.CANCELLED);
+        ticket.setRefundAmount(refundAmount);
+        ticket.setCancelledAt(now);
         ticketRepository.save(ticket);
 
 
@@ -235,6 +249,31 @@ public class TicketServiceImpl implements TicketService {
         Ticket ticket = ticketRepository.findByQrCode(qrCode)
                 .orElseThrow(() -> new ResourceNotFoundException("Ticket", qrCode));
 
+        Trip trip = ticket.getTrip();
+
+        // Un conductor solo valida QR de los viajes que tiene asignados
+        requireAssignedDriverIfDriver(trip.getId());
+
+        // BOARDING en la parada de origen; DEPARTED para quienes suben en paradas intermedias
+        Trip.TripStatus tripStatus = trip.getStatus();
+        if (tripStatus != Trip.TripStatus.BOARDING && tripStatus != Trip.TripStatus.DEPARTED) {
+            throw new BusinessException("El abordaje no está abierto para este viaje (estado: " + tripStatus + ")",
+                    HttpStatus.BAD_REQUEST, "BOARDING_NOT_OPEN");
+        }
+
+        if (ticket.getStatus() == Ticket.TicketStatus.NO_SHOW && tripStatus == Trip.TripStatus.BOARDING) {
+            // Llegó tarde pero el bus no ha salido: se restituye si la silla no se revendió en su tramo
+            boolean seatStillFree = ticketRepository.isSeatAvailableForSegment(
+                    trip.getId(), ticket.getSeatNumber(),
+                    ticket.getFromStop().getOrder(), ticket.getToStop().getOrder());
+            if (!seatStillFree) {
+                throw new SeatNotAvailableException(
+                        "La silla " + ticket.getSeatNumber() + " ya fue revendida tras el no-show");
+            }
+            ticket.setStatus(Ticket.TicketStatus.SOLD);
+            ticket.setNoShowFee(null);
+        }
+
         if (ticket.getStatus() != Ticket.TicketStatus.SOLD) {
             throw new BusinessException("El ticket no es válido para abordar (estado: " + ticket.getStatus() + ")",
                     HttpStatus.BAD_REQUEST, "TICKET_NOT_VALID");
@@ -245,21 +284,14 @@ public class TicketServiceImpl implements TicketService {
                     HttpStatus.CONFLICT, "TICKET_ALREADY_BOARDED");
         }
 
-        // BOARDING en la parada de origen; DEPARTED para quienes suben en paradas intermedias
-        Trip.TripStatus tripStatus = ticket.getTrip().getStatus();
-        if (tripStatus != Trip.TripStatus.BOARDING && tripStatus != Trip.TripStatus.DEPARTED) {
-            throw new BusinessException("El abordaje no está abierto para este viaje (estado: " + tripStatus + ")",
-                    HttpStatus.BAD_REQUEST, "BOARDING_NOT_OPEN");
-        }
-
         ticket.setBoardedAt(LocalDateTime.now());
         ticket = ticketRepository.save(ticket);
 
         return ticketMapper.toResponse(ticket);
     }
 
-    // Marca como NO_SHOW, cada 5 minutos, los tickets de pasajeros que no han abordado
-    // cuando faltan 5 minutos o menos para la salida (solo quienes suben en la parada de origen)
+    // Marca como NO_SHOW, cada 5 minutos, los tickets de pasajeros que no han abordado cuando faltan
+    // 5 minutos o menos para la salida de un viaje en abordaje (solo quienes suben en la parada de origen)
     @Scheduled(cron = "0 */5 * * * *")
     @Transactional
     public void processNoShows() {
@@ -268,9 +300,11 @@ public class TicketServiceImpl implements TicketService {
         List<Ticket> noShows = ticketRepository.findUnboardedTicketsDepartingBetween(now, now.plusMinutes(5));
 
         // El asiento queda disponible porque la disponibilidad solo cuenta tickets SOLD.
-        // El fee de no-show se cobra en el cierre de caja o facturación.
+        // Se registra el fee configurable de no-show en cada ticket
+        BigDecimal noShowFee = noShows.isEmpty() ? BigDecimal.ZERO : configService.getNoShowFee();
         for (Ticket ticket : noShows) {
             ticket.setStatus(Ticket.TicketStatus.NO_SHOW);
+            ticket.setNoShowFee(noShowFee);
             ticketRepository.save(ticket);
         }
     }
@@ -287,91 +321,123 @@ public class TicketServiceImpl implements TicketService {
         }
     }
 
-    // Calcula el precio final aplicando tarifas dinámicas, multiplicadores y descuentos
+    // Calcula el precio final: tarifa del tramo (FareRule) o precio base, multiplicadores dinámicos
+    // (solo si la regla los tiene activos o no hay regla) y descuento por tipo de pasajero
     private BigDecimal calculateFinalPrice(Trip trip, Stop fromStop, Stop toStop, TicketCreateRequest request, String passengerType) {
-        // Precio base: primero busca en FareRule, si no existe usa ConfigService
-        BigDecimal basePrice = fareRuleRepository.findByRouteIdAndFromStopIdAndToStopId(
+        Optional<FareRule> fareRule = fareRuleRepository.findByRouteIdAndFromStopIdAndToStopId(
                 trip.getRoute().getId(),
                 fromStop.getId(),
                 toStop.getId()
-        ).map(fareRule -> fareRule.getBasePrice())
-         .orElse(configService.getTicketBasePrice());
+        );
 
-        // La demanda se mide sobre la ocupación de ESTE viaje, no sobre todos los viajes del día
-        Long soldTickets = ticketRepository.countSoldSeats(trip.getId());
-        int capacity = trip.getBus().getCapacity();
-        double occupancyRate = (double) soldTickets / capacity;
+        BigDecimal basePrice = fareRule.map(FareRule::getBasePrice)
+                .orElseGet(configService::getTicketBasePrice);
+        boolean dynamicPricing = fareRule.map(rule -> Boolean.TRUE.equals(rule.getDynamicPricingEnabled()))
+                .orElse(true);
 
         BigDecimal dynamicMultiplier = BigDecimal.ONE;
-        if (occupancyRate > 0.8) {
-            dynamicMultiplier = configService.getTicketPriceMultiplierHighDemand();
-        } else if (occupancyRate > 0.6) {
-            dynamicMultiplier = configService.getTicketPriceMultiplierMediumDemand();
-        }
+        if (dynamicPricing) {
+            // La demanda se mide sobre la ocupación del TRAMO solicitado, no de todo el viaje
+            Long soldSeats = ticketRepository.countSoldSeatsForSegment(
+                    trip.getId(), fromStop.getOrder(), toStop.getOrder());
+            int capacity = trip.getBus().getCapacity();
+            double occupancyRate = capacity > 0 ? (double) soldSeats / capacity : 0.0;
 
-        LocalDateTime departureTime = trip.getDepartureTime();
-        int hour = departureTime.getHour();
-        if ((hour >= 6 && hour <= 9) || (hour >= 17 && hour <= 20)) {
-            dynamicMultiplier = dynamicMultiplier.multiply(
-                configService.getTicketPriceMultiplierPeakHours()
-            );
+            if (occupancyRate > 0.8) {
+                dynamicMultiplier = configService.getTicketPriceMultiplierHighDemand();
+            } else if (occupancyRate > 0.6) {
+                dynamicMultiplier = configService.getTicketPriceMultiplierMediumDemand();
+            }
+
+            int hour = trip.getDepartureTime().getHour();
+            if ((hour >= 6 && hour <= 9) || (hour >= 17 && hour <= 20)) {
+                dynamicMultiplier = dynamicMultiplier.multiply(
+                    configService.getTicketPriceMultiplierPeakHours()
+                );
+            }
         }
 
         BigDecimal priceWithMultipliers = basePrice.multiply(dynamicMultiplier);
-        
-        // Aplicar descuento según tipo de pasajero
-        BigDecimal discountPercentage = getDiscountPercentage(passengerType);
+
+        // Aplicar descuento según tipo de pasajero (la regla de tarifa puede definir los suyos)
+        BigDecimal discountPercentage = getDiscountPercentage(passengerType, fareRule.orElse(null));
         BigDecimal discountAmount = priceWithMultipliers
                 .multiply(discountPercentage)
                 .divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
-        
-        BigDecimal finalPrice = priceWithMultipliers.subtract(discountAmount)
+
+        BigDecimal finalPrice = priceWithMultipliers.subtract(discountAmount).max(BigDecimal.ZERO)
                 .setScale(2, RoundingMode.HALF_UP);
 
         return finalPrice;
     }
-    
-    // Obtiene el porcentaje de descuento según el tipo de pasajero (STUDENT, SENIOR, etc.)
-    private BigDecimal getDiscountPercentage(String passengerType) {
-        if (passengerType == null || passengerType.isEmpty()) {
-            return BigDecimal.ZERO; // Sin descuento para ADULT o tipo no especificado
+
+    // Porcentaje de descuento del tipo de pasajero (ADULT, STUDENT, SENIOR, CHILD).
+    // Un tipo desconocido se rechaza en vez de venderse sin descuento
+    private BigDecimal getDiscountPercentage(String passengerType, FareRule fareRule) {
+        if (passengerType == null || passengerType.isBlank() || "ADULT".equalsIgnoreCase(passengerType.trim())) {
+            return BigDecimal.ZERO;
         }
-        
-        // Obtener descuentos de ConfigService
-        var config = configService.getConfig();
-        Integer discount = config.discountPercentages().get(passengerType.toUpperCase());
-        
-        return discount != null ? BigDecimal.valueOf(discount) : BigDecimal.ZERO;
+        String type = passengerType.trim().toUpperCase(Locale.ROOT);
+
+        Map<String, Integer> configDiscounts = configService.getConfig().discountPercentages();
+        Integer discount = configDiscounts.get(type);
+
+        if (fareRule != null && fareRule.getDiscounts() != null) {
+            Object ruleDiscount = fareRule.getDiscounts().entrySet().stream()
+                    .filter(e -> e.getKey().equalsIgnoreCase(type))
+                    .map(Map.Entry::getValue)
+                    .findFirst()
+                    .orElse(null);
+            if (ruleDiscount instanceof Number number) {
+                discount = number.intValue();
+            } else if (ruleDiscount != null) {
+                try {
+                    discount = new BigDecimal(ruleDiscount.toString()).intValue();
+                } catch (NumberFormatException ignored) {
+                    // Valor inválido en la regla: se usa el descuento de la configuración
+                }
+            }
+        }
+
+        if (discount == null) {
+            throw new BusinessException("Tipo de pasajero no válido: " + passengerType
+                    + " (válidos: ADULT, " + String.join(", ", configDiscounts.keySet()) + ")",
+                    HttpStatus.BAD_REQUEST, "INVALID_PASSENGER_TYPE");
+        }
+
+        return BigDecimal.valueOf(Math.max(0, Math.min(100, discount)));
     }
-    
-    // Valida que no se exceda el límite de overbooking configurado para el viaje
-    private void validateOverbooking(Trip trip) {
-        // Contar asientos vendidos para este viaje específico
-        Long soldSeats = ticketRepository.countSoldSeats(trip.getId());
-        
+
+    // Valida el número de silla: 1..capacidad son sillas físicas; por encima de la capacidad solo
+    // se venden las sillas de overbooking aprobadas por un DISPATCHER para este viaje
+    private void validateSeatNumber(Trip trip, Integer seatNumber) {
         int capacity = trip.getBus().getCapacity();
-        double occupancyRate = (double) soldSeats / capacity;
-        double maxOverbookingRate = configService.getOverbookingMaxPercentage();
-        
-        // Calcular capacidad máxima permitida con overbooking
-        double maxAllowedOccupancy = 1.0 + maxOverbookingRate;
-        
-        if (occupancyRate >= maxAllowedOccupancy) {
-            throw new OverbookingNotAllowedException(
-                    String.format("El viaje ha alcanzado el límite de overbooking permitido (%.1f%%). Ocupación actual: %.1f%%",
-                            maxOverbookingRate * 100, occupancyRate * 100));
+        if (seatNumber < 1) {
+            throw new SeatNotAvailableException(
+                    "El asiento " + seatNumber + " no existe en este bus (capacidad: " + capacity + ")");
+        }
+        if (seatNumber > capacity) {
+            int approved = trip.getOverbookingApprovedSeats() == null ? 0 : trip.getOverbookingApprovedSeats();
+            if (seatNumber > capacity + approved) {
+                throw new OverbookingNotAllowedException(
+                        "La silla " + seatNumber + " supera la capacidad del bus (" + capacity
+                                + ") y requiere aprobación de overbooking del DISPATCHER (aprobadas: " + approved + ")");
+            }
         }
     }
 
-    // Valida que el asiento esté entre 1 y la capacidad del bus más el margen de overbooking configurado
-    // (con 40 asientos y 5% de overbooking se admiten los números 41 y 42)
-    private void validateSeatNumber(Trip trip, Integer seatNumber) {
-        int capacity = trip.getBus().getCapacity();
-        // El epsilon evita errores de redondeo de double (p. ej. 100 * 0.29 = 28.999999999999996)
-        int maxSeatNumber = capacity + (int) Math.floor(capacity * configService.getOverbookingMaxPercentage() + 1e-9);
-        if (seatNumber < 1 || seatNumber > maxSeatNumber) {
-            throw new SeatNotAvailableException(
-                    "El asiento " + seatNumber + " no existe en este bus (capacidad: " + capacity + ")");
+    // Si quien llama es un DRIVER, debe ser el conductor asignado al viaje
+    private void requireAssignedDriverIfDriver(Long tripId) {
+        if (!SecurityUtils.hasRole("DRIVER")) {
+            return;
+        }
+        String username = SecurityUtils.currentUsername().orElse("");
+        boolean assigned = assignmentRepository.findByTripId(tripId)
+                .map(a -> a.getDriver() != null && username.equalsIgnoreCase(a.getDriver().getEmail()))
+                .orElse(false);
+        if (!assigned) {
+            throw new BusinessException("El conductor no está asignado a este viaje",
+                    HttpStatus.FORBIDDEN, "DRIVER_NOT_ASSIGNED");
         }
     }
 

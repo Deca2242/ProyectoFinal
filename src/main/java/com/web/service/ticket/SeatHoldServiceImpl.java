@@ -45,6 +45,8 @@ public class SeatHoldServiceImpl implements SeatHoldService {
     @Override
     @Transactional
     public SeatHoldResponse createHold(Long tripId, Integer seatNumber, SeatHoldRequest request) {
+        // Serializa holds y ventas del mismo viaje (evita dos holds simultáneos sobre la misma silla)
+        tripRepository.lockById(tripId);
         Trip trip = tripRepository.findById(tripId)
                 .orElseThrow(() -> new ResourceNotFoundException("Viaje", tripId));
 
@@ -68,6 +70,7 @@ public class SeatHoldServiceImpl implements SeatHoldService {
     @Override
     @Transactional
     public SeatHoldResponse createHold(SeatHoldCreateRequest request, Long userId) {
+        tripRepository.lockById(request.tripId());
         Trip trip = tripRepository.findById(request.tripId())
                 .orElseThrow(() -> new ResourceNotFoundException("Viaje", request.tripId()));
 
@@ -92,7 +95,9 @@ public class SeatHoldServiceImpl implements SeatHoldService {
             throw new SeatNotAvailableException("El viaje ya ha salido");
         }
 
-        if (seatNumber < 1 || seatNumber > trip.getBus().getCapacity()) {
+        // Sillas físicas más las de overbooking aprobadas por el DISPATCHER
+        int approvedExtra = trip.getOverbookingApprovedSeats() == null ? 0 : trip.getOverbookingApprovedSeats();
+        if (seatNumber < 1 || seatNumber > trip.getBus().getCapacity() + approvedExtra) {
             throw new SeatNotAvailableException(
                     "El asiento " + seatNumber + " no existe en este bus (capacidad: " +
                             trip.getBus().getCapacity() + ")"

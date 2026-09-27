@@ -10,6 +10,7 @@ public record RevenueMetrics(
                 BigDecimal ticketRevenue,
                 BigDecimal parcelRevenue,
                 BigDecimal baggageRevenue,
+                BigDecimal noShowFeeRevenue,
                 Map<String, BigDecimal> revenueByPaymentMethod,
                 Map<String, BigDecimal> revenueByChannel) implements Serializable {
 }

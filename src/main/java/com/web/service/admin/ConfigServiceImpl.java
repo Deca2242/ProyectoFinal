@@ -7,6 +7,9 @@ import com.web.entity.User;
 import com.web.exception.ResourceNotFoundException;
 import com.web.repository.ConfigRepository;
 import com.web.repository.UserRepository;
+import com.web.exception.BusinessException;
+import org.springframework.http.HttpStatus;
+import java.util.List;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -20,6 +23,8 @@ import java.util.Map;
 @Service
 @RequiredArgsConstructor
 public class ConfigServiceImpl implements ConfigService {
+
+    private static final List<String> SUPPORTED_DISCOUNT_TYPES = List.of("STUDENT", "SENIOR", "CHILD");
 
     private final ConfigRepository configRepository;
     private final UserRepository userRepository;
@@ -106,6 +111,12 @@ public class ConfigServiceImpl implements ConfigService {
         // Descuentos
         if (request.discountPercentages() != null && !request.discountPercentages().isEmpty()) {
             for (Map.Entry<String, Integer> entry : request.discountPercentages().entrySet()) {
+                // Solo existen las tarifas especiales niño / estudiante / adulto mayor
+                if (!SUPPORTED_DISCOUNT_TYPES.contains(entry.getKey().toUpperCase(java.util.Locale.ROOT))) {
+                    throw new BusinessException("Tipo de descuento no válido: " + entry.getKey()
+                            + " (válidos: " + String.join(", ", SUPPORTED_DISCOUNT_TYPES) + ")",
+                            HttpStatus.BAD_REQUEST, "INVALID_DISCOUNT_TYPE");
+                }
                 String discountKey = "discount.percentage." + entry.getKey().toLowerCase();
                 updateConfigValue(discountKey, String.valueOf(entry.getValue()), admin);
             }

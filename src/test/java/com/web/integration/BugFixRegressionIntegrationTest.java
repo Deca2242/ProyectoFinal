@@ -66,6 +66,9 @@ class BugFixRegressionIntegrationTest extends BaseIntegrationTest {
     private EntityManager entityManager;
 
     @Autowired
+    private AssignmentRepository assignmentRepository;
+
+    @Autowired
     private TicketServiceImpl ticketService;
 
     private Route route;
@@ -137,11 +140,12 @@ class BugFixRegressionIntegrationTest extends BaseIntegrationTest {
         assertThat(ticketRepository.findByTripIdAndSeatNumber(trip.getId(), 5)).hasSize(2);
     }
 
-    // Verifica que un asiento fuera de la capacidad del bus se rechace
+    // Verifica que un asiento fuera de la capacidad del bus se rechace (sin overbooking aprobado: 403)
     @Test
-    void purchase_withSeatOutsideCapacity_shouldReturn409() throws Exception {
+    void purchase_withSeatOutsideCapacity_shouldReturn403() throws Exception {
         String token = registerAndLogin("pax@test.com");
-        purchase(token, userId("pax@test.com"), 999, stopA, stopC).andExpect(status().isConflict());
+        purchase(token, userId("pax@test.com"), 999, stopA, stopC).andExpect(status().isForbidden());
+        purchase(token, userId("pax@test.com"), 0, stopA, stopC).andExpect(status().isConflict());
     }
 
     // Verifica el flujo hold -> compra (antes fallaba con 500 por el CHECK de seat_holds)
@@ -444,7 +448,12 @@ class BugFixRegressionIntegrationTest extends BaseIntegrationTest {
 
         createUser(new RegisterRequest("Conductor", "driver@test.com", "300", "secreto1", User.Role.DRIVER));
         String driverToken = login("driver@test.com", "secreto1");
+        assignDriver("driver@test.com");
         String qr = ticketRepository.findById(boardedId).orElseThrow().getQrCode();
+
+        // Un conductor que no está asignado al viaje no puede validar sus QR
+        createUser(new RegisterRequest("Otro conductor", "driver2@test.com", "300", "secreto1", User.Role.DRIVER));
+        board(login("driver2@test.com", "secreto1"), qr).andExpect(status().isForbidden());
 
         // Con el viaje aún en SCHEDULED no se puede abordar
         board(driverToken, qr).andExpect(status().isBadRequest())
@@ -518,6 +527,15 @@ class BugFixRegressionIntegrationTest extends BaseIntegrationTest {
         createUser(new RegisterRequest("Conductor", "driver@test.com", "300", "secreto1", User.Role.DRIVER));
         String driverToken = login("driver@test.com", "secreto1");
 
+        // Sin asignación el conductor no puede ver la lista de pasajeros
+        mvc.perform(get("/api/v1/trips/{tripId}/passengers", trip.getId())
+                        .param("fromStopId", stopA.getId().toString())
+                        .param("toStopId", stopB.getId().toString())
+                        .header("Authorization", "Bearer " + driverToken))
+                .andExpect(status().isForbidden());
+
+        assignDriver("driver@test.com");
+
         mvc.perform(get("/api/v1/trips/{tripId}/passengers", trip.getId())
                         .param("fromStopId", stopA.getId().toString())
                         .param("toStopId", stopB.getId().toString())
@@ -588,5 +606,12 @@ class BugFixRegressionIntegrationTest extends BaseIntegrationTest {
     private Long ticketId(ResultActions purchase) throws Exception {
         String body = purchase.andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
         return om.readTree(body).get("id").asLong();
+    }
+
+    private void assignDriver(String driverEmail) {
+        assignmentRepository.saveAndFlush(Assignment.builder()
+                .trip(tripRepository.findById(trip.getId()).orElseThrow())
+                .driver(userRepository.findByEmail(driverEmail).orElseThrow())
+                .build());
     }
 }

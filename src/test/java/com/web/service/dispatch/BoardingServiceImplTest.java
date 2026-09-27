@@ -8,7 +8,9 @@ import com.web.exception.BusinessException;
 import com.web.exception.InvalidStateTransitionException;
 import com.web.exception.ResourceNotFoundException;
 import com.web.repository.AssignmentRepository;
+import com.web.repository.TicketRepository;
 import com.web.repository.TripRepository;
+import com.web.service.admin.ConfigService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -34,6 +36,11 @@ class BoardingServiceImplTest {
     private AssignmentRepository assignmentRepository;
     @Mock
     private TripMapper tripMapper;
+
+    @Mock
+    private TicketRepository ticketRepository;
+    @Mock
+    private ConfigService configService;
 
     @InjectMocks
     private BoardingServiceImpl boardingService;

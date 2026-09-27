@@ -1,5 +1,7 @@
 package com.web.integration.userstories;
 
+import com.web.service.dispatch.BaggageSummaryService;
+import com.web.service.dispatch.OverbookingService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.web.config.CustomUserDetailsService;
 import com.web.config.JwtAuthenticationFilter;
@@ -57,6 +59,12 @@ class DriverBoardingTest {
 
     @MockitoBean
     private BoardingService boardingService;
+
+    @MockitoBean
+    private OverbookingService overbookingService;
+
+    @MockitoBean
+    private BaggageSummaryService baggageSummaryService;
 
     @MockitoBean
     private AssignmentService assignmentService;

@@ -18,7 +18,10 @@ public class OtpGenerator {
         if (provided == null || expected == null) {
             return false;
         }
-        return provided.trim().equals(expected.trim());
+        // Comparación en tiempo constante para no filtrar cuántos dígitos coinciden
+        return java.security.MessageDigest.isEqual(
+                provided.trim().getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                expected.trim().getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
 }
 

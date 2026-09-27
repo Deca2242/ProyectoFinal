@@ -206,116 +206,124 @@ class DispatcherOverbookingIntegrationTest extends BaseIntegrationTest {
         passengerId = passengerLoginResponse.user().id();
     }
 
-    /* Verifica que overbooking permite vender más tickets: Admin configura 5%, bus 40 asientos → límite 42 tickets,
-    comprar 42 OK, comprar 43 falla
-    */
+    /* Overbooking controlado (regla 4 / caso de uso 3): con 5 % configurado y bus de 40 sillas hay hasta 2 sillas extra,
+       pero cada una requiere aprobación del DISPATCHER con ocupación > 95 % y menos de 30 min para salir.
+       Sin aprobación, o por encima del máximo, la compra responde 403 */
     @Test
     void configureOverbooking_shouldAffectTicketPurchases() throws Exception {
-        // Admin configura overbooking 5% (bus 40 → límite 42 tickets)
-        ConfigUpdateRequest configUpdate = new ConfigUpdateRequest(
-                null, null, null, null, null, null,
-                null, 0.05,
-                null, null, null, null, null,
-                null, null, null, null
-        );
+        configureOverbooking(0.05);
+        String dispatcherToken = dispatcherToken();
 
-        mvc.perform(put("/api/v1/admin/config")
-                        .header("Authorization", "Bearer " + adminToken)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(om.writeValueAsString(configUpdate)))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.overbookingMaxPercentage").value(0.05));
+        // Con la salida lejana no se puede aprobar aunque el bus se llene
+        sellSeats(1, busCapacity);
+        approve(dispatcherToken).andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("30 minutos")));
 
-        // Verificar configuración guardada
-        MvcResult configResult = mvc.perform(get("/api/v1/admin/config")
-                        .header("Authorization", "Bearer " + adminToken))
-                .andExpect(status().isOk())
-                .andReturn();
-
-        ConfigResponse config = om.readValue(configResult.getResponse().getContentAsString(), ConfigResponse.class);
-        assertThat(config.overbookingMaxPercentage()).isEqualTo(0.05);
-
-        // Comprar 42 tickets (hasta límite con overbooking)
-        for (int i = 1; i <= 42; i++) {
-            TicketCreateRequest ticketRequest = new TicketCreateRequest(
-                    tripId, passengerId, i,
-                    fromStopId, "Terminal Bogotá", 1,
-                    toStopId, "Terminal Medellín", 2,
-                    new BigDecimal("50000"), Ticket.PaymentMethod.CARD,
-                    null, "ADULT"
-            );
-
-            mvc.perform(post("/api/v1/trips/{tripId}/tickets", tripId)
-                            .header("Authorization", "Bearer " + passengerToken)
-                            .contentType(MediaType.APPLICATION_JSON)
-                            .content(om.writeValueAsString(ticketRequest)))
-                    .andExpect(status().isCreated());
-        }
-
-        // Intentar comprar ticket #43 debe fallar (excede límite)
-        TicketCreateRequest excessTicketRequest = new TicketCreateRequest(
-                tripId, passengerId, 43,
-                fromStopId, "Terminal Bogotá", 1,
-                toStopId, "Terminal Medellín", 2,
-                new BigDecimal("50000"), Ticket.PaymentMethod.CARD,
-                null, "ADULT"
-        );
-
-        mvc.perform(post("/api/v1/trips/{tripId}/tickets", tripId)
-                        .header("Authorization", "Bearer " + passengerToken)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(om.writeValueAsString(excessTicketRequest)))
-                .andExpect(status().isBadRequest())
+        // Sin aprobación la silla 41 no se vende
+        purchase(busCapacity + 1).andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("overbooking")));
+
+        departSoon();
+
+        // Primera aprobación: silla 41
+        approve(dispatcherToken).andExpect(status().isOk())
+                .andExpect(jsonPath("$.approvedSeatNumber").value(busCapacity + 1))
+                .andExpect(jsonPath("$.maxExtraSeats").value(2));
+        purchase(busCapacity + 1).andExpect(status().isCreated());
+
+        // Segunda aprobación: silla 42 (40 + floor(40 * 0.05))
+        approve(dispatcherToken).andExpect(status().isOk())
+                .andExpect(jsonPath("$.approvedSeatNumber").value(busCapacity + 2));
+        purchase(busCapacity + 2).andExpect(status().isCreated());
+
+        // Se alcanzó el máximo: ni otra aprobación ni la silla 43
+        approve(dispatcherToken).andExpect(status().isForbidden());
+        purchase(busCapacity + 3).andExpect(status().isForbidden());
+
+        // Un pasajero no puede aprobar overbooking
+        approve(passengerToken).andExpect(status().isForbidden());
     }
 
-    // Verifica que overbooking 0% solo permite capacidad exacta: Admin configura 0%, comprar 40 OK, comprar 41 falla
+    // Con overbooking 0 % no hay sillas extra aunque el bus esté lleno y falten menos de 30 minutos
     @Test
     void configureOverbookingToZero_shouldNotAllowOverbooking() throws Exception {
-        // Admin configura overbooking 0% (sin sobreventa)
+        configureOverbooking(0.0);
+        String dispatcherToken = dispatcherToken();
+
+        sellSeats(1, busCapacity);
+        departSoon();
+
+        approve(dispatcherToken).andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("máximo")));
+        purchase(busCapacity + 1).andExpect(status().isForbidden());
+    }
+
+    // Con ocupación de 95 % o menos no se aprueba overbooking
+    @Test
+    void approveOverbooking_withLowOccupancy_shouldReturn403() throws Exception {
+        configureOverbooking(0.05);
+        String dispatcherToken = dispatcherToken();
+        sellSeats(1, 38); // 38/40 = 95 %
+        departSoon();
+
+        approve(dispatcherToken).andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("95%")));
+    }
+
+    private void configureOverbooking(double percentage) throws Exception {
         ConfigUpdateRequest configUpdate = new ConfigUpdateRequest(
                 null, null, null, null, null, null,
-                null, 0.0,
+                null, percentage,
                 null, null, null, null, null,
                 null, null, null, null
         );
-
         mvc.perform(put("/api/v1/admin/config")
                         .header("Authorization", "Bearer " + adminToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(om.writeValueAsString(configUpdate)))
-                .andExpect(status().isOk());
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.overbookingMaxPercentage").value(percentage));
+    }
 
-        // Comprar 40 tickets (capacidad exacta)
-        for (int i = 1; i <= busCapacity; i++) {
-            TicketCreateRequest ticketRequest = new TicketCreateRequest(
-                    tripId, passengerId, i,
-                    fromStopId, "Terminal Bogotá", 1,
-                    toStopId, "Terminal Medellín", 2,
-                    new BigDecimal("50000"), Ticket.PaymentMethod.CARD,
-                    null, "ADULT"
-            );
+    private String dispatcherToken() throws Exception {
+        createUser(new RegisterRequest("Despachador", "dispatcher.overbooking@test.com", "3001234567",
+                "password123", User.Role.DISPATCHER));
+        MvcResult result = mvc.perform(post("/api/v1/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(om.writeValueAsString(new LoginRequest("dispatcher.overbooking@test.com", "password123"))))
+                .andExpect(status().isOk())
+                .andReturn();
+        return om.readValue(result.getResponse().getContentAsString(), LoginResponse.class).token();
+    }
 
-            mvc.perform(post("/api/v1/trips/{tripId}/tickets", tripId)
-                            .header("Authorization", "Bearer " + passengerToken)
-                            .contentType(MediaType.APPLICATION_JSON)
-                            .content(om.writeValueAsString(ticketRequest)))
-                    .andExpect(status().isCreated());
+    private void departSoon() {
+        Trip trip = tripRepository.findById(tripId).orElseThrow();
+        trip.setDepartureTime(LocalDateTime.now().plusMinutes(20));
+        tripRepository.saveAndFlush(trip);
+    }
+
+    private void sellSeats(int from, int to) throws Exception {
+        for (int seat = from; seat <= to; seat++) {
+            purchase(seat).andExpect(status().isCreated());
         }
+    }
 
-        // Intentar comprar ticket #41 debe fallar (sin overbooking)
-        TicketCreateRequest excessTicketRequest = new TicketCreateRequest(
-                tripId, passengerId, busCapacity + 1,
+    private org.springframework.test.web.servlet.ResultActions purchase(int seat) throws Exception {
+        TicketCreateRequest ticketRequest = new TicketCreateRequest(
+                tripId, passengerId, seat,
                 fromStopId, "Terminal Bogotá", 1,
                 toStopId, "Terminal Medellín", 2,
                 new BigDecimal("50000"), Ticket.PaymentMethod.CARD,
                 null, "ADULT"
         );
+        return mvc.perform(post("/api/v1/trips/{tripId}/tickets", tripId)
+                .header("Authorization", "Bearer " + passengerToken)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(om.writeValueAsString(ticketRequest)));
+    }
 
-        mvc.perform(post("/api/v1/trips/{tripId}/tickets", tripId)
-                        .header("Authorization", "Bearer " + passengerToken)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(om.writeValueAsString(excessTicketRequest)))
-                .andExpect(status().isBadRequest());
+    private org.springframework.test.web.servlet.ResultActions approve(String token) throws Exception {
+        return mvc.perform(post("/api/v1/trips/{tripId}/overbooking/approve", tripId)
+                .header("Authorization", "Bearer " + token));
     }
 }

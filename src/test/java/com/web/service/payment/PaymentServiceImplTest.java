@@ -113,7 +113,7 @@ class PaymentServiceImplTest {
         List<Ticket> cashTickets = List.of(ticket);
 
         when(userRepository.findById(1L)).thenReturn(Optional.of(user));
-        when(ticketRepository.findSoldCashTicketsPurchasedBetween(
+        when(ticketRepository.findCashTicketsPurchasedBetween(
                 LocalDate.now().atStartOfDay(), LocalDate.now().plusDays(1).atStartOfDay()))
                 .thenReturn(cashTickets);
 
@@ -214,7 +214,7 @@ class PaymentServiceImplTest {
                 1L, date, null, BigDecimal.valueOf(20000), null
         );
         when(userRepository.findById(1L)).thenReturn(Optional.of(user));
-        when(ticketRepository.findSoldCashTicketsPurchasedBetween(
+        when(ticketRepository.findCashTicketsPurchasedBetween(
                 date.atStartOfDay(), date.plusDays(1).atStartOfDay()))
                 .thenReturn(List.of());
 
@@ -243,7 +243,7 @@ class PaymentServiceImplTest {
                 1L, date, null, BigDecimal.valueOf(70000), "Cierre turno tarde"
         );
         when(userRepository.findById(1L)).thenReturn(Optional.of(user));
-        when(ticketRepository.findSoldCashTicketsPurchasedBetween(
+        when(ticketRepository.findCashTicketsPurchasedBetween(
                 date.atStartOfDay(), date.plusDays(1).atStartOfDay()))
                 .thenReturn(List.of(ticket, second));
 
@@ -265,7 +265,7 @@ class PaymentServiceImplTest {
                 1L, date, BigDecimal.valueOf(999999), BigDecimal.valueOf(50000), null
         );
         when(userRepository.findById(1L)).thenReturn(Optional.of(user));
-        when(ticketRepository.findSoldCashTicketsPurchasedBetween(
+        when(ticketRepository.findCashTicketsPurchasedBetween(
                 date.atStartOfDay(), date.plusDays(1).atStartOfDay()))
                 .thenReturn(List.of(ticket));
 
@@ -279,7 +279,7 @@ class PaymentServiceImplTest {
         assertThat(result.userName()).isEqualTo("Clerk");
         assertThat(result.date()).isEqualTo(date);
         assertThat(result.closedAt()).isNotNull();
-        verify(ticketRepository).findSoldCashTicketsPurchasedBetween(
+        verify(ticketRepository).findCashTicketsPurchasedBetween(
                 LocalDateTime.of(2026, 3, 15, 0, 0), LocalDateTime.of(2026, 3, 16, 0, 0));
     }
 }

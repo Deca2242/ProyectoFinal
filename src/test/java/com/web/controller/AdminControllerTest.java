@@ -1,5 +1,6 @@
 package com.web.controller;
 
+import com.web.service.admin.MetricsService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.web.dto.admin.ConfigResponse;
 import com.web.dto.admin.ConfigUpdateRequest;
@@ -51,6 +52,9 @@ class  AdminControllerTest {
 
     @MockitoBean
     private ConfigService configService;
+
+    @MockitoBean
+    private MetricsService metricsService;
 
     @MockitoBean
     private UserRepository userRepository;

@@ -1,5 +1,7 @@
 package com.web.controller;
 
+import com.web.service.dispatch.BaggageSummaryService;
+import com.web.service.dispatch.OverbookingService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.web.dto.dispatch.Assignment.AssignmentCreateRequest;
 import com.web.dto.dispatch.Assignment.AssignmentResponse;
@@ -59,6 +61,12 @@ class DispatchControllerTest {
 
     @MockitoBean
     private BoardingService boardingService;
+
+    @MockitoBean
+    private OverbookingService overbookingService;
+
+    @MockitoBean
+    private BaggageSummaryService baggageSummaryService;
 
     @MockitoBean
     private JwtTokenProvider jwtTokenProvider;

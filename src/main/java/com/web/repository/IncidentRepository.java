@@ -10,6 +10,9 @@ import java.util.List;
 
 public interface IncidentRepository extends JpaRepository<Incident, Long> {
 
+    // Métricas: incidentes registrados en un rango de tiempo
+    long countByCreatedAtBetween(LocalDateTime start, LocalDateTime end);
+
     // Buscar incidentes por entidad
     List<Incident> findByEntityTypeAndEntityId(
             Incident.EntityType entityType,

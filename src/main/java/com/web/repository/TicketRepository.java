@@ -225,14 +225,15 @@ public interface TicketRepository extends JpaRepository<Ticket, Long> {
             @Param("tripId") Long tripId,
             @Param("cutoffTime") LocalDateTime cutoffTime);
 
-    // Tickets sin abordar que suben en la primera parada de viajes que salen en la ventana (now, cutoff]
+    // Tickets sin abordar que suben en la primera parada de viajes en abordaje que salen en la ventana (now, cutoff].
+    // Si el abordaje no se abrió (viaje retrasado o sin despachar) no se marca a nadie; al dar salida se marcan los restantes
     // Los pasajeros de paradas intermedias no se marcan porque no hay hora estimada por parada
     @Query("""
                 SELECT t FROM Ticket t
                 JOIN t.trip tr
                 WHERE t.status = 'SOLD'
                 AND t.boardedAt IS NULL
-                AND tr.status IN ('SCHEDULED', 'BOARDING')
+                AND tr.status = 'BOARDING'
                 AND tr.departureTime > :now
                 AND tr.departureTime <= :cutoffTime
                 AND t.fromStop.order = (
@@ -248,4 +249,64 @@ public interface TicketRepository extends JpaRepository<Ticket, Long> {
 
     // Verificar si existe un ticket vendido para un viaje y asiento específico
     boolean existsByTripIdAndSeatNumberAndStatus(Long tripId, Integer seatNumber, Ticket.TicketStatus status);
+
+    // Sillas distintas vendidas que se solapan con el tramo (ocupación real del tramo)
+    @Query("""
+                SELECT COUNT(DISTINCT t.seatNumber)
+                FROM Ticket t
+                WHERE t.trip.id = :tripId
+                AND t.status = 'SOLD'
+                AND t.fromStop.order < :toStopOrder
+                AND t.toStop.order > :fromStopOrder
+            """)
+    Long countSoldSeatsForSegment(
+            @Param("tripId") Long tripId,
+            @Param("fromStopOrder") Integer fromStopOrder,
+            @Param("toStopOrder") Integer toStopOrder);
+
+    // Tickets vendidos sin abordar que suben en la primera parada (no-show al dar salida)
+    @Query("""
+                SELECT t FROM Ticket t
+                JOIN t.trip tr
+                WHERE tr.id = :tripId
+                AND t.status = 'SOLD'
+                AND t.boardedAt IS NULL
+                AND t.fromStop.order = (
+                    SELECT MIN(s.order) FROM Stop s WHERE s.route.id = tr.route.id
+                )
+            """)
+    List<Ticket> findUnboardedOriginTickets(@Param("tripId") Long tripId);
+
+    // Tickets en efectivo comprados en el rango, en cualquier estado: el dinero se recibió al vender
+    @Query("""
+                SELECT t FROM Ticket t
+                WHERE t.paymentMethod = 'CASH'
+                AND t.purchasedAt >= :start
+                AND t.purchasedAt < :end
+                ORDER BY t.purchasedAt
+            """)
+    List<Ticket> findCashTicketsPurchasedBetween(
+            @Param("start") LocalDateTime start,
+            @Param("end") LocalDateTime end);
+
+    // Tickets en efectivo cancelados en el rango (su reembolso sale de la caja ese día)
+    @Query("""
+                SELECT t FROM Ticket t
+                WHERE t.paymentMethod = 'CASH'
+                AND t.status = 'CANCELLED'
+                AND t.cancelledAt >= :start
+                AND t.cancelledAt < :end
+            """)
+    List<Ticket> findCashTicketsCancelledBetween(
+            @Param("start") LocalDateTime start,
+            @Param("end") LocalDateTime end);
+
+    // Métricas: tickets de viajes en el rango de fechas (ventas por canal, no-show, fees)
+    @Query("""
+                SELECT t FROM Ticket t
+                WHERE t.trip.tripDate BETWEEN :startDate AND :endDate
+            """)
+    List<Ticket> findByTripDateBetween(
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate);
 }

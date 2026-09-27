@@ -1,12 +1,16 @@
 package com.web.controller;
 
+import com.web.dto.baggage.TripBaggageSummaryResponse;
 import com.web.dto.dispatch.Assignment.AssignmentCreateRequest;
 import com.web.dto.dispatch.Assignment.AssignmentResponse;
 import com.web.dto.dispatch.Assignment.AssignmentUpdateRequest;
+import com.web.dto.dispatch.OverbookingApprovalResponse;
 import com.web.dto.trip.TripResponse;
 import com.web.exception.BusinessException;
 import com.web.service.dispatch.AssignmentService;
+import com.web.service.dispatch.BaggageSummaryService;
 import com.web.service.dispatch.BoardingService;
+import com.web.service.dispatch.OverbookingService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -22,6 +26,8 @@ public class DispatchController {
 
     private final AssignmentService assignmentService;
     private final BoardingService boardingService;
+    private final OverbookingService overbookingService;
+    private final BaggageSummaryService baggageSummaryService;
 
     // Asigna un conductor y despachador a un viaje
     @PostMapping("/assign")
@@ -92,5 +98,26 @@ public class DispatchController {
 
         TripResponse response = boardingService.departTrip(tripId);
         return ResponseEntity.ok(response);
+    }
+
+    // Registra la llegada del viaje (conductor asignado)
+    @PostMapping("/arrive")
+    @PreAuthorize("hasRole('DRIVER')")
+    public ResponseEntity<TripResponse> arriveTrip(@PathVariable Long tripId) {
+        return ResponseEntity.ok(boardingService.arriveTrip(tripId));
+    }
+
+    // Aprueba una silla extra de overbooking (ocupación > 95 % y menos de 30 min para salir)
+    @PostMapping("/overbooking/approve")
+    @PreAuthorize("hasRole('DISPATCHER')")
+    public ResponseEntity<OverbookingApprovalResponse> approveOverbooking(@PathVariable Long tripId) {
+        return ResponseEntity.ok(overbookingService.approveExtraSeat(tripId));
+    }
+
+    // Conteo de equipaje del viaje (maletero / panel de despacho)
+    @GetMapping("/baggage")
+    @PreAuthorize("hasAnyRole('DISPATCHER', 'DRIVER', 'CLERK')")
+    public ResponseEntity<TripBaggageSummaryResponse> getTripBaggage(@PathVariable Long tripId) {
+        return ResponseEntity.ok(baggageSummaryService.getTripBaggage(tripId));
     }
 }

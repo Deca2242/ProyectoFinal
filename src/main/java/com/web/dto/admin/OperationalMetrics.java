@@ -8,5 +8,6 @@ public record OperationalMetrics(
         Double onTimeArrivalRate,
         Double noShowRate,
         Integer totalCancellations,
-        Integer totalIncidents) implements Serializable {
+        Integer totalIncidents,
+        Integer totalNoShows) implements Serializable {
 }

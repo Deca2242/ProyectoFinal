@@ -5,6 +5,7 @@ import com.web.dto.admin.ConfigUpdateRequest;
 import com.web.dto.admin.MetricsResponse;
 import com.web.repository.UserRepository;
 import com.web.service.admin.ConfigService;
+import com.web.service.admin.MetricsService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -24,6 +25,7 @@ import java.time.LocalDate;
 public class AdminController {
 
     private final ConfigService configService;
+    private final MetricsService metricsService;
     private final UserRepository userRepository;
 
     // Obtiene la configuración actual del sistema
@@ -42,6 +44,14 @@ public class AdminController {
     }
 
     // Obtiene el ID del usuario autenticado desde el contexto de seguridad
+    // KPIs: ocupación, ingresos, puntualidad, no-show, cancelaciones y encomiendas en un rango de fechas
+    @GetMapping("/metrics")
+    public ResponseEntity<MetricsResponse> getMetrics(
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate) {
+        return ResponseEntity.ok(metricsService.getMetrics(startDate, endDate));
+    }
+
     private Long getCurrentUserId() {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
         String email = authentication.getName();
