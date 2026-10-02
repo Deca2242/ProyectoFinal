@@ -450,5 +450,24 @@ class RouteServiceImplTest {
         // Then
         assertThat(result).containsExactly(routeResponse);
     }
+
+    @Test
+    void shouldRemoveStop_WhenReferencedByTicketsParcelsOrFares_ThrowConflict() {
+        // Given
+        Route owner = Route.builder().id(1L).build();
+        Stop referenced = Stop.builder().id(5L).route(owner).order(2).build();
+        when(routeRepository.findById(1L)).thenReturn(Optional.of(owner));
+        when(stopRepository.findById(5L)).thenReturn(Optional.of(referenced));
+        when(stopRepository.isReferenced(5L)).thenReturn(true);
+
+        // When/Then
+        assertThatThrownBy(() -> routeService.removeStop(1L, 5L))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    assertThat(((BusinessException) ex).getCode()).isEqualTo("STOP_IN_USE");
+                    assertThat(((BusinessException) ex).getStatus()).isEqualTo(org.springframework.http.HttpStatus.CONFLICT);
+                });
+        verify(stopRepository, never()).delete(any());
+    }
 }
 

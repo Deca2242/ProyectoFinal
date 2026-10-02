@@ -415,5 +415,21 @@ class AuthServiceImplTest {
         verify(userRepository).save(captor.capture());
         return captor.getValue();
     }
+
+    @Test
+    void shouldRegisterAndLogin_WithMixedCaseEmail_NormalizeToLowercase() {
+        // Given: el email no distingue mayúsculas
+        RegisterRequest request = new RegisterRequest("Juan", "  Juan@Example.COM ", "300", "secreto1", User.Role.PASSENGER);
+        when(userRepository.existsByEmail("juan@example.com")).thenReturn(true);
+
+        // When/Then: se compara ya normalizado
+        assertThatThrownBy(() -> authService.register(request))
+                .isInstanceOf(com.web.exception.EmailAlreadyExistsException.class);
+
+        when(userRepository.findByEmail("juan@example.com")).thenReturn(Optional.empty());
+        assertThatThrownBy(() -> authService.login(new LoginRequest("JUAN@example.com", "x")))
+                .isInstanceOf(com.web.exception.InvalidCredentialsException.class);
+        verify(userRepository).findByEmail("juan@example.com");
+    }
 }
 
