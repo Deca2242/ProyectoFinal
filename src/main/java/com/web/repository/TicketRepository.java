@@ -25,6 +25,9 @@ public interface TicketRepository extends JpaRepository<Ticket, Long> {
     // Buscar ticket por código QR para validación
     Optional<Ticket> findByQrCode(String qrCode);
 
+    // Venta offline ya sincronizada (idempotencia por id del dispositivo)
+    Optional<Ticket> findByOfflineClientId(String offlineClientId);
+
     // Buscar tickets conflictivos para validación de tramos - CASO DE USO 1
     @Query("""
                 SELECT t FROM Ticket t

@@ -83,6 +83,13 @@ public class Ticket {
     @Builder.Default
     private SalesChannel channel = SalesChannel.APP;
 
+    // Venta offline: id generado por el dispositivo (idempotencia) y momento en que se sincronizó
+    @Column(name = "offline_client_id", unique = true, length = 64)
+    private String offlineClientId;
+
+    @Column(name = "synced_at")
+    private LocalDateTime syncedAt;
+
     // Relación one-to-one con Baggage
     @OneToOne(mappedBy = "ticket", cascade = CascadeType.ALL, orphanRemoval = true)
     private Baggage baggage;

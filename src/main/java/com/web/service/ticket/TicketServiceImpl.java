@@ -55,6 +55,13 @@ public class TicketServiceImpl implements TicketService {
     @Override
     @Transactional
     public TicketResponse purchaseTicket(TicketCreateRequest request) {
+        return purchaseTicket(request, null);
+    }
+
+    // offline != null: venta hecha sin conexión que se sincroniza (conserva su hora real e id del dispositivo)
+    @Override
+    @Transactional
+    public TicketResponse purchaseTicket(TicketCreateRequest request, OfflineSaleContext offline) {
         LocalDateTime now = LocalDateTime.now();
 
         // Bloquear el viaje hasta el fin de la transacción: dos compras simultáneas del mismo viaje
@@ -65,12 +72,16 @@ public class TicketServiceImpl implements TicketService {
         Trip trip = tripRepository.findById(request.tripId())
                 .orElseThrow(() -> new ResourceNotFoundException("Viaje", request.tripId()));
 
-        if (trip.getStatus() != Trip.TripStatus.SCHEDULED && trip.getStatus() != Trip.TripStatus.BOARDING) {
-            throw new InvalidSegmentException("El viaje no está disponible para compra (estado: " + trip.getStatus() + ")");
-        }
+        if (offline != null) {
+            validateOfflineSale(trip, offline, now);
+        } else {
+            if (trip.getStatus() != Trip.TripStatus.SCHEDULED && trip.getStatus() != Trip.TripStatus.BOARDING) {
+                throw new InvalidSegmentException("El viaje no está disponible para compra (estado: " + trip.getStatus() + ")");
+            }
 
-        if (!trip.getDepartureTime().isAfter(now)) {
-            throw new BusinessException("El viaje ya salió", HttpStatus.BAD_REQUEST, "TRIP_ALREADY_DEPARTED");
+            if (!trip.getDepartureTime().isAfter(now)) {
+                throw new BusinessException("El viaje ya salió", HttpStatus.BAD_REQUEST, "TRIP_ALREADY_DEPARTED");
+            }
         }
 
         User passenger = userRepository.findById(request.passengerId())
@@ -133,6 +144,11 @@ public class TicketServiceImpl implements TicketService {
         ticket.setQrCode(qrCodeGenerator.generateTicketQr());
         ticket.setChannel(SecurityUtils.hasRole("CLERK") ? Ticket.SalesChannel.BOX_OFFICE : Ticket.SalesChannel.APP);
         ticket.setSoldBy(SecurityUtils.currentUsername().flatMap(userRepository::findByEmail).orElse(null));
+        if (offline != null) {
+            ticket.setPurchasedAt(offline.soldAt());
+            ticket.setOfflineClientId(offline.offlineClientId());
+            ticket.setSyncedAt(now);
+        }
         ticket = ticketRepository.save(ticket);
 
         // Registrar equipaje si se solicitó, calculando cargo por exceso si supera el límite
@@ -260,6 +276,16 @@ public class TicketServiceImpl implements TicketService {
     @Override
     @Transactional
     public TicketResponse boardTicket(String qrCode) {
+        return boardTicket(qrCode, null);
+    }
+
+    // boardedAt: hora registrada por el dispositivo en un abordaje offline (se usa si es anterior a ahora)
+    @Override
+    @Transactional
+    public TicketResponse boardTicket(String qrCode, LocalDateTime boardedAt) {
+        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime boardingTime = boardedAt != null && boardedAt.isBefore(now) ? boardedAt : now;
+
         Ticket ticket = ticketRepository.findByQrCode(qrCode)
                 .orElseThrow(() -> new ResourceNotFoundException("Ticket", qrCode));
 
@@ -275,7 +301,11 @@ public class TicketServiceImpl implements TicketService {
                     HttpStatus.BAD_REQUEST, "BOARDING_NOT_OPEN");
         }
 
-        if (ticket.getStatus() == Ticket.TicketStatus.NO_SHOW && tripStatus == Trip.TripStatus.BOARDING) {
+        // Un abordaje offline registrado antes de la salida real también cuenta como llegada a tiempo
+        boolean boardedBeforeDeparture = boardedAt != null && trip.getDepartedAt() != null
+                && boardingTime.isBefore(trip.getDepartedAt());
+        if (ticket.getStatus() == Ticket.TicketStatus.NO_SHOW
+                && (tripStatus == Trip.TripStatus.BOARDING || boardedBeforeDeparture)) {
             // Llegó tarde pero el bus no ha salido: se restituye si la silla no se revendió en su tramo
             boolean seatStillFree = ticketRepository.isSeatAvailableForSegment(
                     trip.getId(), ticket.getSeatNumber(),
@@ -298,7 +328,7 @@ public class TicketServiceImpl implements TicketService {
                     HttpStatus.CONFLICT, "TICKET_ALREADY_BOARDED");
         }
 
-        ticket.setBoardedAt(LocalDateTime.now());
+        ticket.setBoardedAt(boardingTime);
         ticket = ticketRepository.save(ticket);
 
         return ticketMapper.toResponse(ticket);
@@ -320,6 +350,25 @@ public class TicketServiceImpl implements TicketService {
             ticket.setStatus(Ticket.TicketStatus.NO_SHOW);
             ticket.setNoShowFee(noShowFee);
             ticketRepository.save(ticket);
+        }
+    }
+
+    // Venta offline: la hora de venta no puede estar en el futuro ni ser posterior a la salida.
+    // Se acepta aunque el viaje haya salido al sincronizar; solo se rechaza si fue cancelado
+    private void validateOfflineSale(Trip trip, OfflineSaleContext offline, LocalDateTime now) {
+        LocalDateTime soldAt = offline.soldAt();
+        if (soldAt == null || soldAt.isAfter(now.plusMinutes(OfflineSaleContext.CLOCK_TOLERANCE_MINUTES))) {
+            throw new BusinessException("La hora de la venta offline no puede estar en el futuro",
+                    HttpStatus.BAD_REQUEST, "INVALID_SOLD_AT");
+        }
+        if (trip.getStatus() == Trip.TripStatus.CANCELLED) {
+            throw new BusinessException("El viaje fue cancelado", HttpStatus.BAD_REQUEST, "TRIP_CANCELLED");
+        }
+        LocalDateTime departure = trip.getDepartedAt() != null && trip.getDepartedAt().isBefore(trip.getDepartureTime())
+                ? trip.getDepartedAt() : trip.getDepartureTime();
+        if (!soldAt.isBefore(departure)) {
+            throw new BusinessException("La venta offline es posterior a la salida del viaje",
+                    HttpStatus.BAD_REQUEST, "SOLD_AFTER_DEPARTURE");
         }
     }
 

@@ -47,6 +47,8 @@ public interface TicketMapper {
     @Mapping(target = "noShowFee", ignore = true)
     @Mapping(target = "channel", ignore = true)
     @Mapping(target = "soldBy", ignore = true)
+    @Mapping(target = "offlineClientId", ignore = true)
+    @Mapping(target = "syncedAt", ignore = true)
     Ticket toEntity(TicketCreateRequest request);
 }
 

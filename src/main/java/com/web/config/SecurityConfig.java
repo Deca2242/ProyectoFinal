@@ -93,6 +93,11 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.POST, "/api/v1/payments/confirm").hasRole("CLERK")
                         .requestMatchers(HttpMethod.POST, "/api/v1/cash/close").hasAnyRole("CLERK", "DRIVER")
 
+                        // Sincronización offline
+                        .requestMatchers(HttpMethod.POST, "/api/v1/sync/tickets").hasAnyRole("CLERK", "DRIVER")
+                        .requestMatchers(HttpMethod.POST, "/api/v1/sync/boardings").hasAnyRole("DRIVER", "DISPATCHER")
+                        .requestMatchers(HttpMethod.GET, "/api/v1/sync/conflicts").hasAnyRole("CLERK", "DRIVER", "DISPATCHER", "ADMIN")
+
                         // Tickets - requiere autenticación
                         .requestMatchers(HttpMethod.POST, "/api/v1/tickets/qr/*/board").hasAnyRole("DRIVER", "DISPATCHER")
                         .requestMatchers("/api/v1/trips/*/seats/*/hold").authenticated()
