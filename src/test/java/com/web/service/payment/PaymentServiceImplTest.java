@@ -66,6 +66,7 @@ class PaymentServiceImplTest {
                 .price(BigDecimal.valueOf(50000))
                 .status(Ticket.TicketStatus.SOLD)
                 .paymentMethod(Ticket.PaymentMethod.CASH)
+                .soldBy(User.builder().id(1L).build())
                 .build();
 
         user = User.builder()
@@ -239,6 +240,7 @@ class PaymentServiceImplTest {
                 .price(new BigDecimal("30000.50"))
                 .status(Ticket.TicketStatus.SOLD)
                 .paymentMethod(Ticket.PaymentMethod.CASH)
+                .soldBy(User.builder().id(1L).build())
                 .build();
         CashCloseRequest request = new CashCloseRequest(
                 1L, date, null, BigDecimal.valueOf(70000), "Cierre turno tarde"
@@ -293,6 +295,7 @@ class PaymentServiceImplTest {
                 .price(new BigDecimal(price))
                 .status(status)
                 .paymentMethod(Ticket.PaymentMethod.CASH)
+                .soldBy(User.builder().id(1L).build())
                 .build();
     }
 
@@ -372,6 +375,34 @@ class PaymentServiceImplTest {
         assertThat(result.expectedAmount()).isEqualByComparingTo("-42000");
         assertThat(result.difference()).isEqualByComparingTo("0");
         assertThat(result.ticketCount()).isZero();
+    }
+
+    @Test
+    void shouldCloseCash_WithTicketsOfOtherCashiers_CountOnlyOwnSales() {
+        // Given: la caja es por cajero; las ventas y reembolsos de otro usuario no cuentan
+        LocalDate date = LocalDate.of(2026, 3, 15);
+        Ticket own = cashTicket(1L, "50000", Ticket.TicketStatus.SOLD);
+        Ticket other = cashTicket(2L, "70000", Ticket.TicketStatus.SOLD);
+        other.setSoldBy(User.builder().id(2L).build());
+        Ticket appSale = cashTicket(3L, "30000", Ticket.TicketStatus.SOLD);
+        appSale.setSoldBy(null);
+        Ticket otherCancelled = cashTicket(4L, "40000", Ticket.TicketStatus.CANCELLED);
+        otherCancelled.setSoldBy(User.builder().id(2L).build());
+        otherCancelled.setRefundAmount(new BigDecimal("20000"));
+        CashCloseRequest request = new CashCloseRequest(1L, date, null, BigDecimal.valueOf(50000), null);
+        when(userRepository.findById(1L)).thenReturn(Optional.of(user));
+        when(ticketRepository.findCashTicketsPurchasedBetween(date.atStartOfDay(), date.plusDays(1).atStartOfDay()))
+                .thenReturn(List.of(own, other, appSale));
+        when(ticketRepository.findCashTicketsCancelledBetween(date.atStartOfDay(), date.plusDays(1).atStartOfDay()))
+                .thenReturn(List.of(otherCancelled));
+
+        // When
+        CashCloseResponse result = paymentService.closeCash(request, 1L);
+
+        // Then
+        assertThat(result.expectedAmount()).isEqualByComparingTo("50000");
+        assertThat(result.ticketCount()).isEqualTo(1);
+        assertThat(result.difference()).isEqualByComparingTo("0");
     }
 }
 

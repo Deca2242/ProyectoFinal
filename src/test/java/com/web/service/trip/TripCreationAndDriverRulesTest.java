@@ -72,6 +72,11 @@ class TripCreationAndDriverRulesTest {
     @Mock
     private TicketMapper ticketMapper;
 
+    @Mock
+    private com.web.repository.ParcelRepository parcelRepository;
+    @Mock
+    private com.web.repository.IncidentRepository incidentRepository;
+
     @InjectMocks
     private TripServiceImpl tripService;
 
@@ -288,7 +293,11 @@ class TripCreationAndDriverRulesTest {
     void shouldGetPassengersBySegment_WithAssignedDriver_ReturnPassengers() {
         // Given
         authenticate("driver@test.com", "DRIVER");
-        List<TicketResponse> responses = List.of(mock(TicketResponse.class));
+        List<TicketResponse> responses = List.of(new TicketResponse(
+                1L, 1L, "Ruta", null, null, 7L, "Pasajero", "pasajero@test.com", 4,
+                10L, "Origen", 2, 11L, "Destino", 4, java.math.BigDecimal.TEN,
+                com.web.entity.Ticket.PaymentMethod.CASH, com.web.entity.Ticket.TicketStatus.SOLD,
+                "QR", null, null, null));
         when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
         when(assignmentRepository.findByTripId(1L)).thenReturn(Optional.of(assignmentFor("DRIVER@test.com")));
         givenStopsOfRoute();
@@ -299,7 +308,12 @@ class TripCreationAndDriverRulesTest {
         List<TicketResponse> result = tripService.getPassengersBySegment(1L, 10L, 11L);
 
         // Then
-        assertThat(result).isSameAs(responses);
+        // La lista conserva los datos del pasajero, pero no expone su email
+        assertThat(result).singleElement().satisfies(r -> {
+            assertThat(r.passengerName()).isEqualTo("Pasajero");
+            assertThat(r.seatNumber()).isEqualTo(4);
+            assertThat(r.passengerEmail()).isNull();
+        });
     }
 
     @Test

@@ -72,6 +72,11 @@ public class Ticket {
     @Column(name = "no_show_fee", precision = 10, scale = 2)
     private BigDecimal noShowFee;
 
+    // Usuario que registró la venta (cierre de caja por cajero)
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "sold_by_id")
+    private User soldBy;
+
     // Canal de venta: taquilla o app (métricas de ventas por canal)
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)

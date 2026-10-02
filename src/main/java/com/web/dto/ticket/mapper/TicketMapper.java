@@ -46,6 +46,7 @@ public interface TicketMapper {
     @Mapping(target = "cancelledAt", ignore = true)
     @Mapping(target = "noShowFee", ignore = true)
     @Mapping(target = "channel", ignore = true)
+    @Mapping(target = "soldBy", ignore = true)
     Ticket toEntity(TicketCreateRequest request);
 }
 

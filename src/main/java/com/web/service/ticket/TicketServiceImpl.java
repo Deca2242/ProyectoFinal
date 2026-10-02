@@ -74,6 +74,9 @@ public class TicketServiceImpl implements TicketService {
         User passenger = userRepository.findById(request.passengerId())
                 .orElseThrow(() -> new ResourceNotFoundException("Pasajero", request.passengerId()));
 
+        // Un pasajero solo compra a su nombre; la taquilla y el personal pueden vender a terceros
+        requireSelfIfPassenger(passenger);
+
         Stop fromStop = stopRepository.findById(request.fromStopId())
                 .orElseThrow(() -> new ResourceNotFoundException("Parada de origen", request.fromStopId()));
         Stop toStop = stopRepository.findById(request.toStopId())
@@ -127,6 +130,7 @@ public class TicketServiceImpl implements TicketService {
         ticket.setPrice(finalPrice);
         ticket.setQrCode(qrCodeGenerator.generateTicketQr());
         ticket.setChannel(SecurityUtils.hasRole("CLERK") ? Ticket.SalesChannel.BOX_OFFICE : Ticket.SalesChannel.APP);
+        ticket.setSoldBy(SecurityUtils.currentUsername().flatMap(userRepository::findByEmail).orElse(null));
         ticket = ticketRepository.save(ticket);
 
         // Registrar equipaje si se solicitó, calculando cargo por exceso si supera el límite
@@ -170,6 +174,9 @@ public class TicketServiceImpl implements TicketService {
     public TicketCancelResponse cancelTicket(Long ticketId) {
         Ticket ticket = ticketRepository.findById(ticketId)
                 .orElseThrow(() -> new ResourceNotFoundException("Ticket", ticketId));
+
+        // Un pasajero solo cancela sus propios tickets
+        requireSelfIfPassenger(ticket.getPassenger());
 
         if (ticket.getStatus() != Ticket.TicketStatus.SOLD) {
             throw new InvalidSegmentException("El ticket ya está cancelado o es no-show");
@@ -222,6 +229,8 @@ public class TicketServiceImpl implements TicketService {
     public TicketResponse getTicketById(Long id) {
         Ticket ticket = ticketRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Ticket", id));
+        // Un pasajero solo consulta sus propios tickets
+        requireSelfIfPassenger(ticket.getPassenger());
         return ticketMapper.toResponse(ticket);
     }
 
@@ -379,7 +388,14 @@ public class TicketServiceImpl implements TicketService {
         }
         String type = passengerType.trim().toUpperCase(Locale.ROOT);
 
+        // Solo existen las tarifas especiales de la configuración (niño / estudiante / adulto mayor);
+        // la regla de tarifa del tramo puede cambiar su porcentaje, pero no crear tipos nuevos
         Map<String, Integer> configDiscounts = configService.getConfig().discountPercentages();
+        if (!configDiscounts.containsKey(type)) {
+            throw new BusinessException("Tipo de pasajero no válido: " + passengerType
+                    + " (válidos: ADULT, " + String.join(", ", configDiscounts.keySet()) + ")",
+                    HttpStatus.BAD_REQUEST, "INVALID_PASSENGER_TYPE");
+        }
         Integer discount = configDiscounts.get(type);
 
         if (fareRule != null && fareRule.getDiscounts() != null) {
@@ -399,13 +415,7 @@ public class TicketServiceImpl implements TicketService {
             }
         }
 
-        if (discount == null) {
-            throw new BusinessException("Tipo de pasajero no válido: " + passengerType
-                    + " (válidos: ADULT, " + String.join(", ", configDiscounts.keySet()) + ")",
-                    HttpStatus.BAD_REQUEST, "INVALID_PASSENGER_TYPE");
-        }
-
-        return BigDecimal.valueOf(Math.max(0, Math.min(100, discount)));
+        return BigDecimal.valueOf(Math.max(0, Math.min(100, discount == null ? 0 : discount)));
     }
 
     // Valida el número de silla: 1..capacidad son sillas físicas; por encima de la capacidad solo
@@ -423,6 +433,18 @@ public class TicketServiceImpl implements TicketService {
                         "La silla " + seatNumber + " supera la capacidad del bus (" + capacity
                                 + ") y requiere aprobación de overbooking del DISPATCHER (aprobadas: " + approved + ")");
             }
+        }
+    }
+
+    // Si quien llama es un PASSENGER, solo puede operar sobre tickets a su propio nombre
+    private void requireSelfIfPassenger(User passenger) {
+        if (!SecurityUtils.hasRole("PASSENGER")) {
+            return;
+        }
+        String username = SecurityUtils.currentUsername().orElse("");
+        if (passenger == null || !username.equalsIgnoreCase(passenger.getEmail())) {
+            throw new BusinessException("Un pasajero solo puede operar sobre sus propios tickets",
+                    HttpStatus.FORBIDDEN, "NOT_TICKET_OWNER");
         }
     }
 

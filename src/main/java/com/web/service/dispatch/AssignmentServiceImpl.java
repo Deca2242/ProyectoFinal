@@ -12,6 +12,8 @@ import com.web.exception.ResourceNotFoundException;
 import com.web.repository.AssignmentRepository;
 import com.web.repository.TripRepository;
 import com.web.repository.UserRepository;
+import com.web.exception.InvalidStateTransitionException;
+import com.web.util.SecurityUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -56,8 +58,13 @@ public class AssignmentServiceImpl implements AssignmentService {
         if (driver.getRole() != User.Role.DRIVER) {
             throw new BusinessException("El usuario no es un conductor", HttpStatus.BAD_REQUEST, "INVALID_DRIVER_ROLE");
         }
+        requireDriverAvailable(driver, trip);
 
-        User dispatcher = userRepository.findById(request.dispatcherId())
+        // El despachador es quien hace la asignación; el dispatcherId del body solo se usa si no hay uno autenticado
+        User dispatcher = (SecurityUtils.hasRole("DISPATCHER")
+                ? SecurityUtils.currentUsername().flatMap(userRepository::findByEmail)
+                : java.util.Optional.<User>empty())
+                .or(() -> request.dispatcherId() == null ? java.util.Optional.empty() : userRepository.findById(request.dispatcherId()))
                 .orElseThrow(() -> new ResourceNotFoundException("Despachador", request.dispatcherId()));
 
         if (dispatcher.getRole() != User.Role.DISPATCHER) {
@@ -93,6 +100,13 @@ public class AssignmentServiceImpl implements AssignmentService {
         Assignment assignment = assignmentRepository.findById(assignmentId)
                 .orElseThrow(() -> new ResourceNotFoundException("Asignación", assignmentId));
 
+        // El checklist y el conductor solo se modifican antes de la salida
+        Trip.TripStatus tripStatus = assignment.getTrip().getStatus();
+        if (tripStatus != Trip.TripStatus.SCHEDULED && tripStatus != Trip.TripStatus.BOARDING) {
+            throw new InvalidStateTransitionException(
+                    "La asignación no se puede modificar con el viaje en estado " + tripStatus);
+        }
+
         assignmentMapper.updateEntityFromRequest(request, assignment);
 
         // El mapper ignora driverId: el cambio de conductor se valida y aplica aquí
@@ -101,6 +115,9 @@ public class AssignmentServiceImpl implements AssignmentService {
                     .orElseThrow(() -> new ResourceNotFoundException("Conductor", request.driverId()));
             if (driver.getRole() != User.Role.DRIVER) {
                 throw new BusinessException("El usuario no es un conductor", HttpStatus.BAD_REQUEST, "INVALID_DRIVER_ROLE");
+            }
+            if (!driver.getId().equals(assignment.getDriver() == null ? null : assignment.getDriver().getId())) {
+                requireDriverAvailable(driver, assignment.getTrip());
             }
             assignment.setDriver(driver);
         }
@@ -127,6 +144,18 @@ public class AssignmentServiceImpl implements AssignmentService {
     public List<AssignmentResponse> getDispatcherAssignments(Long dispatcherId) {
         List<Assignment> assignments = assignmentRepository.findByDispatcherId(dispatcherId, LocalDate.now());
         return assignmentMapper.toResponseList(assignments);
+    }
+
+    // El conductor debe estar activo y sin otro viaje que se cruce en horario
+    private void requireDriverAvailable(User driver, Trip trip) {
+        if (driver.getStatus() == User.Status.INACTIVE) {
+            throw new BusinessException("El conductor está inactivo", HttpStatus.BAD_REQUEST, "DRIVER_INACTIVE");
+        }
+        LocalDateTime eta = trip.getArrivalEta() != null ? trip.getArrivalEta() : trip.getDepartureTime();
+        if (!assignmentRepository.isDriverAvailable(driver.getId(), trip.getTripDate(), trip.getDepartureTime(), eta)) {
+            throw new BusinessException("El conductor ya tiene un viaje asignado en ese horario",
+                    HttpStatus.CONFLICT, "DRIVER_NOT_AVAILABLE");
+        }
     }
 }
 

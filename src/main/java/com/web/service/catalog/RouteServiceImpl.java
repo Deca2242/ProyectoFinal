@@ -145,6 +145,12 @@ public class RouteServiceImpl implements RouteService {
             throw new BusinessException("La parada no pertenece a esta ruta", HttpStatus.BAD_REQUEST, "STOP_ROUTE_MISMATCH");
         }
 
+        // Borrarla dejaría huérfanos tickets, encomiendas o tarifas (y cambiaría el orden de los tramos vendidos)
+        if (stopRepository.isReferenced(stopId)) {
+            throw new BusinessException("La parada tiene tickets, encomiendas o tarifas asociadas y no se puede eliminar",
+                    HttpStatus.CONFLICT, "STOP_IN_USE");
+        }
+
         stopRepository.delete(stop);
 
     }

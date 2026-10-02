@@ -9,6 +9,8 @@ import com.web.dto.trip.SeatAvailabilityResponse;
 import com.web.dto.trip.SeatStatusResponse;
 import com.web.dto.trip.mapper.TripMapper;
 import com.web.entity.Bus;
+import com.web.entity.Incident;
+import com.web.entity.Parcel;
 import com.web.entity.Route;
 import com.web.entity.SeatHold;
 import com.web.entity.Stop;
@@ -19,6 +21,8 @@ import com.web.exception.InvalidStateTransitionException;
 import com.web.exception.ResourceNotFoundException;
 import com.web.repository.AssignmentRepository;
 import com.web.repository.BusRepository;
+import com.web.repository.IncidentRepository;
+import com.web.repository.ParcelRepository;
 import com.web.repository.RouteRepository;
 import com.web.repository.SeatHoldRepository;
 import com.web.repository.StopRepository;
@@ -47,6 +51,8 @@ public class TripServiceImpl implements TripService {
         private final TicketRepository ticketRepository;
         private final SeatHoldRepository seatHoldRepository;
         private final AssignmentRepository assignmentRepository;
+        private final ParcelRepository parcelRepository;
+        private final IncidentRepository incidentRepository;
         private final TripMapper tripMapper;
         private final TicketMapper ticketMapper;
 
@@ -196,15 +202,20 @@ public class TripServiceImpl implements TripService {
                 Integer fromStopOrder = fromStop.getOrder();
                 Integer toStopOrder = toStop.getOrder();
 
+                // Holds activos que se solapan con el tramo: la silla se muestra HELD (no disponible)
+                List<SeatHold> activeHolds = seatHoldRepository.findActiveHoldsByTrip(tripId, LocalDateTime.now());
+
                 int sellableSeats = capacity + approvedOverbookingSeats(trip);
                 for (Integer seatNumber = 1; seatNumber <= sellableSeats; seatNumber++) {
                         Boolean isAvailable = ticketRepository.isSeatAvailableForSegment(
                                         tripId, seatNumber, fromStopOrder, toStopOrder);
+                        final int seat = seatNumber;
+                        boolean held = isAvailable && activeHolds.stream()
+                                        .anyMatch(h -> h.getSeatNumber() == seat
+                                                        && holdOverlaps(h, fromStopOrder, toStopOrder));
 
-                        seatStatuses.add(new SeatStatusResponse(
-                                        seatNumber,
-                                        isAvailable,
-                                        isAvailable ? "AVAILABLE" : "OCCUPIED"));
+                        String status = !isAvailable ? "OCCUPIED" : held ? "HELD" : "AVAILABLE";
+                        seatStatuses.add(new SeatStatusResponse(seatNumber, isAvailable && !held, status));
                 }
 
                 return seatStatuses;
@@ -283,6 +294,24 @@ public class TripServiceImpl implements TripService {
                         hold.setStatus(SeatHold.HoldStatus.EXPIRED);
                 }
                 seatHoldRepository.saveAll(activeHolds);
+
+                // Las encomiendas que aún no se entregaron quedan FAILED con un incidente para reasignarlas
+                List<Parcel> pendingParcels = parcelRepository.findByTripId(trip.getId()).stream()
+                                .filter(p -> p.getStatus() == Parcel.ParcelStatus.CREATED
+                                                || p.getStatus() == Parcel.ParcelStatus.IN_TRANSIT)
+                                .toList();
+                for (Parcel parcel : pendingParcels) {
+                        parcel.setStatus(Parcel.ParcelStatus.FAILED);
+                        incidentRepository.save(Incident.builder()
+                                        .entityType(Incident.EntityType.PARCEL)
+                                        .entityId(parcel.getId())
+                                        .incidentType(Incident.IncidentType.DELIVERY_FAIL)
+                                        .description("Viaje " + trip.getId() + " cancelado: la encomienda "
+                                                        + parcel.getCode() + " debe reasignarse")
+                                        .createdAt(now)
+                                        .build());
+                }
+                parcelRepository.saveAll(pendingParcels);
         }
 
         // Obtiene la lista de pasajeros que viajan en un tramo específico
@@ -326,7 +355,10 @@ public class TripServiceImpl implements TripService {
                 // Todos los pasajeros a bordo en algún punto del tramo, no solo los de origen/destino exactos
                 List<Ticket> tickets = ticketRepository.findTicketsBySegment(tripId, fromStop.getOrder(),
                                 toStop.getOrder());
-                return ticketMapper.toResponseList(tickets);
+                // La lista de pasajeros para conductor/despachador no incluye el email (dato personal innecesario)
+                return ticketMapper.toResponseList(tickets).stream()
+                                .map(TripServiceImpl::withoutEmail)
+                                .toList();
         }
 
         // Valida que la transición de estado del viaje sea permitida
@@ -344,6 +376,23 @@ public class TripServiceImpl implements TripService {
                 if (!isValidTransition) {
                         throw new InvalidStateTransitionException(currentStatus.name(), newStatus.name());
                 }
+        }
+
+        // Un hold sin tramo bloquea todo el viaje; uno con tramo solo si se solapa por orden de parada
+        private boolean holdOverlaps(SeatHold hold, int fromOrder, int toOrder) {
+                if (hold.getFromStop() == null || hold.getToStop() == null) {
+                        return true;
+                }
+                return hold.getFromStop().getOrder() < toOrder && hold.getToStop().getOrder() > fromOrder;
+        }
+
+        private static TicketResponse withoutEmail(TicketResponse t) {
+                return new TicketResponse(t.id(), t.tripId(), t.routeName(), t.tripDate(), t.departureTime(),
+                                t.passengerId(), t.passengerName(), null, t.seatNumber(),
+                                t.fromStopId(), t.fromStopName(), t.fromStopOrder(),
+                                t.toStopId(), t.toStopName(), t.toStopOrder(),
+                                t.price(), t.paymentMethod(), t.status(), t.qrCode(), t.purchasedAt(),
+                                t.baggage(), t.boardedAt());
         }
 
         private int approvedOverbookingSeats(Trip trip) {

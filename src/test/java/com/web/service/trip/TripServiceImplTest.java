@@ -62,6 +62,11 @@ class TripServiceImplTest {
     @Mock
     private SeatHoldRepository seatHoldRepository;
 
+    @Mock
+    private com.web.repository.ParcelRepository parcelRepository;
+    @Mock
+    private com.web.repository.IncidentRepository incidentRepository;
+
     @InjectMocks
     private TripServiceImpl tripService;
 
@@ -114,8 +119,8 @@ class TripServiceImplTest {
         // Given
         TripCreateRequest request = new TripCreateRequest(
                 1L, 1L, LocalDate.now().plusDays(1),
-                LocalDateTime.now().plusDays(1).plusHours(8),
-                LocalDateTime.now().plusDays(1).plusHours(12)
+                LocalDate.now().plusDays(1).atTime(8, 0),
+                LocalDate.now().plusDays(1).atTime(12, 0)
         );
 
         when(routeRepository.findById(1L)).thenReturn(Optional.of(route));
@@ -601,8 +606,8 @@ class TripServiceImplTest {
     private TripCreateRequest buildTripRequest() {
         return new TripCreateRequest(
                 1L, 1L, LocalDate.now().plusDays(1),
-                LocalDateTime.now().plusDays(1).plusHours(8),
-                LocalDateTime.now().plusDays(1).plusHours(12)
+                LocalDate.now().plusDays(1).atTime(8, 0),
+                LocalDate.now().plusDays(1).atTime(12, 0)
         );
     }
 

@@ -351,18 +351,17 @@ class TicketPricingAndBoardingRulesTest {
     }
 
     @Test
-    void shouldPurchaseTicket_WithTypeOnlyInFareRule_AcceptRuleDiscount() {
-        // Given: el tipo no existe en la configuración pero la regla le da descuento
+    void shouldPurchaseTicket_WithTypeOnlyInFareRule_ThrowInvalidPassengerType() {
+        // Given: la regla de tarifa no puede crear tipos de pasajero que la configuración no conoce
         TicketCreateRequest request = request(10, "VETERAN");
-        givenValidPurchase(request);
+        givenPurchaseUntilSeatValidation(request);
         givenFareRule(fareRule("20000", false, Map.of("VETERAN", 10)));
         givenConfigDiscounts();
 
-        // When
-        ticketService.purchaseTicket(request);
-
-        // Then
-        assertThat(ticket.getPrice()).isEqualByComparingTo("18000.00");
+        // When/Then
+        assertThatThrownBy(() -> ticketService.purchaseTicket(request))
+                .isInstanceOf(BusinessException.class)
+                .extracting("code").isEqualTo("INVALID_PASSENGER_TYPE");
     }
 
     // ---------- Límites del descuento y del precio ----------

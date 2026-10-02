@@ -53,7 +53,7 @@ public class PaymentServiceImpl implements PaymentService {
 
 
 
-    // Calcula el efectivo esperado del día y lo compara con el monto real reportado:
+    // Calcula el efectivo esperado del día en la caja de quien cierra (CLERK/DRIVER) y lo compara con el monto real:
     //  + tickets en efectivo vendidos ese día (en cualquier estado: el dinero se recibió al vender)
     //  + cargos por exceso de equipaje de esos tickets
     //  - reembolsos de tickets en efectivo cancelados ese día
@@ -65,8 +65,13 @@ public class PaymentServiceImpl implements PaymentService {
 
         LocalDateTime startOfDay = request.date().atStartOfDay();
         LocalDateTime endOfDay = request.date().plusDays(1).atStartOfDay();
-        List<Ticket> soldTickets = ticketRepository.findCashTicketsPurchasedBetween(startOfDay, endOfDay);
-        List<Ticket> cancelledTickets = ticketRepository.findCashTicketsCancelledBetween(startOfDay, endOfDay);
+        // Solo la caja de quien cierra: ventas que registró y reembolsos de esas ventas
+        List<Ticket> soldTickets = ticketRepository.findCashTicketsPurchasedBetween(startOfDay, endOfDay).stream()
+                .filter(t -> soldBy(t, userId))
+                .toList();
+        List<Ticket> cancelledTickets = ticketRepository.findCashTicketsCancelledBetween(startOfDay, endOfDay).stream()
+                .filter(t -> soldBy(t, userId))
+                .toList();
 
         BigDecimal sales = soldTickets.stream()
                 .map(t -> t.getPrice().add(excessFee(t)))
@@ -89,6 +94,10 @@ public class PaymentServiceImpl implements PaymentService {
                 soldTickets.size(),
                 LocalDateTime.now()
         );
+    }
+
+    private boolean soldBy(Ticket ticket, Long userId) {
+        return ticket.getSoldBy() != null && userId.equals(ticket.getSoldBy().getId());
     }
 
     private BigDecimal excessFee(Ticket ticket) {

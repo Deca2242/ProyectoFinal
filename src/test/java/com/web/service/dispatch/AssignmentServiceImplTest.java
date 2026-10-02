@@ -55,6 +55,8 @@ class AssignmentServiceImplTest {
 
     @BeforeEach
     void setUp() {
+        // Por defecto el conductor está libre en el horario del viaje
+        lenient().when(assignmentRepository.isDriverAvailable(any(), any(), any(), any())).thenReturn(true);
         trip = Trip.builder()
                 .id(1L)
                 .status(Trip.TripStatus.SCHEDULED)

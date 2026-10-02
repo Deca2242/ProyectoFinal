@@ -17,6 +17,9 @@ import com.web.repository.TicketRepository;
 import com.web.repository.TripRepository;
 import com.web.repository.UserRepository;
 import com.web.service.admin.ConfigService;
+import com.web.exception.BusinessException;
+import com.web.util.SecurityUtils;
+import org.springframework.http.HttpStatus;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -31,6 +34,8 @@ import java.util.Optional;
 @Service
 @RequiredArgsConstructor
 public class SeatHoldServiceImpl implements SeatHoldService {
+
+    static final int MAX_ACTIVE_HOLDS_PER_USER_AND_TRIP = 4;
 
     private final SeatHoldRepository seatHoldRepository;
     private final TicketRepository ticketRepository;
@@ -86,6 +91,13 @@ public class SeatHoldServiceImpl implements SeatHoldService {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Usuario", userId));
 
+        // Un pasajero solo reserva a su nombre; la taquilla puede reservar para terceros
+        if (SecurityUtils.hasRole("PASSENGER")
+                && !SecurityUtils.currentUsername().orElse("").equalsIgnoreCase(user.getEmail())) {
+            throw new BusinessException("Un pasajero solo puede reservar a su propio nombre",
+                    HttpStatus.FORBIDDEN, "NOT_HOLD_OWNER");
+        }
+
         if (trip.getStatus() != Trip.TripStatus.SCHEDULED) {
             throw new SeatNotAvailableException(
                     "El viaje no admite reservas (estado: " + trip.getStatus() + ")");
@@ -137,6 +149,15 @@ public class SeatHoldServiceImpl implements SeatHoldService {
             throw new SeatNotAvailableException(
                     "El asiento " + seatNumber + " ya está vendido para el tramo seleccionado"
             );
+        }
+
+        // Tope de holds activos por usuario y viaje: evita que alguien bloquee el bus entero
+        long otherActiveHolds = seatHoldRepository.findUserActiveHoldsForTrip(tripId, userId, now).stream()
+                .filter(h -> overlappingHolds.stream().noneMatch(o -> o.getId() != null && o.getId().equals(h.getId())))
+                .count();
+        if (otherActiveHolds >= MAX_ACTIVE_HOLDS_PER_USER_AND_TRIP) {
+            throw new BusinessException("Se alcanzó el máximo de " + MAX_ACTIVE_HOLDS_PER_USER_AND_TRIP
+                    + " reservas activas por viaje", HttpStatus.BAD_REQUEST, "HOLD_LIMIT_REACHED");
         }
 
         for (SeatHold replacedHold : overlappingHolds) {
