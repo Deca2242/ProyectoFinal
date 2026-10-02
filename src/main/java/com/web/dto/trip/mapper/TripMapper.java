@@ -61,6 +61,7 @@ public interface TripMapper {
     @Mapping(target = "route", ignore = true)
     @Mapping(target = "bus", ignore = true)
     @Mapping(target = "tripDate", ignore = true)
+    @Mapping(target = "status", ignore = true)
     @Mapping(target = "createdAt", ignore = true)
     @Mapping(target = "seatHolds", ignore = true)
     @Mapping(target = "tickets", ignore = true)

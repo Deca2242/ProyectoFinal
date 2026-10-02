@@ -146,6 +146,16 @@ public class AssignmentServiceImpl implements AssignmentService {
         return assignmentMapper.toResponseList(assignments);
     }
 
+    // Asignaciones de un despachador para una fecha (sin fecha, las de hoy en adelante)
+    @Override
+    @Transactional(readOnly = true)
+    public List<AssignmentResponse> getDispatcherAssignments(Long dispatcherId, LocalDate date) {
+        if (date == null) {
+            return getDispatcherAssignments(dispatcherId);
+        }
+        return assignmentMapper.toResponseList(assignmentRepository.findDispatcherAssignmentsForDate(dispatcherId, date));
+    }
+
     // El conductor debe estar activo y sin otro viaje que se cruce en horario
     private void requireDriverAvailable(User driver, Trip trip) {
         if (driver.getStatus() == User.Status.INACTIVE) {

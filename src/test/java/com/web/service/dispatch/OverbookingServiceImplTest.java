@@ -3,12 +3,15 @@ package com.web.service.dispatch;
 import com.web.dto.dispatch.OverbookingApprovalResponse;
 import com.web.entity.Bus;
 import com.web.entity.Incident;
+import com.web.entity.OverbookingPolicy;
+import com.web.entity.Route;
 import com.web.entity.Trip;
 import com.web.entity.User;
 import com.web.exception.BusinessException;
 import com.web.exception.OverbookingNotAllowedException;
 import com.web.exception.ResourceNotFoundException;
 import com.web.repository.IncidentRepository;
+import com.web.repository.OverbookingPolicyRepository;
 import com.web.repository.TicketRepository;
 import com.web.repository.TripRepository;
 import com.web.repository.UserRepository;
@@ -30,6 +33,7 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -54,6 +58,8 @@ class OverbookingServiceImplTest {
     private UserRepository userRepository;
     @Mock
     private ConfigService configService;
+    @Mock
+    private OverbookingPolicyRepository overbookingPolicyRepository;
 
     @InjectMocks
     private OverbookingServiceImpl overbookingService;
@@ -406,5 +412,89 @@ class OverbookingServiceImplTest {
         // Then
         verify(incidentRepository).save(argThat(i -> i.getReportedBy() == null));
         verifyNoInteractions(userRepository);
+    }
+
+    // ---------- Política de overbooking por ruta y franja horaria ----------
+
+    private void givenTripOnRouteNearlyFull() {
+        trip.setRoute(Route.builder().id(5L).build());
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+        when(ticketRepository.countSoldSeats(1L)).thenReturn(40L);
+    }
+
+    private OverbookingPolicy policy(String percentage) {
+        return OverbookingPolicy.builder().id(1L).startHour(0).endHour(24)
+                .maxPercentage(new BigDecimal(percentage)).build();
+    }
+
+    @Test
+    void shouldApproveExtraSeat_WithRoutePolicyForDepartureHour_UsePolicyPercentage() {
+        // Given: la política de la ruta permite 10 % (4 sillas) aunque la configuración general diga 5 %
+        givenTripOnRouteNearlyFull();
+        int hour = trip.getDepartureTime().getHour();
+        when(overbookingPolicyRepository.findApplicablePolicy(5L, hour)).thenReturn(Optional.of(policy("0.1000")));
+
+        // When
+        OverbookingApprovalResponse response = overbookingService.approveExtraSeat(1L);
+
+        // Then
+        assertThat(response.maxExtraSeats()).isEqualTo(4);
+        verifyNoInteractions(configService);
+    }
+
+    @Test
+    void shouldApproveExtraSeat_WithRoutePolicyAtZeroPercent_ThrowForbidden() {
+        // Given: en esa franja la ruta no admite overbooking
+        givenTripOnRouteNearlyFull();
+        when(overbookingPolicyRepository.findApplicablePolicy(eq(5L), anyInt())).thenReturn(Optional.of(policy("0.0000")));
+
+        // When/Then
+        assertThatThrownBy(() -> overbookingService.approveExtraSeat(1L))
+                .isInstanceOf(OverbookingNotAllowedException.class)
+                .hasMessageContaining("0 sillas");
+        verify(tripRepository, never()).save(any());
+        verifyNoInteractions(configService);
+    }
+
+    @Test
+    void shouldApproveExtraSeat_WithoutPolicyForDepartureHour_FallBackToConfig() {
+        // Given
+        givenTripOnRouteNearlyFull();
+        when(overbookingPolicyRepository.findApplicablePolicy(eq(5L), anyInt())).thenReturn(Optional.empty());
+        when(configService.getOverbookingMaxPercentage()).thenReturn(0.05);
+
+        // When
+        OverbookingApprovalResponse response = overbookingService.approveExtraSeat(1L);
+
+        // Then
+        assertThat(response.maxExtraSeats()).isEqualTo(2);
+        verify(configService).getOverbookingMaxPercentage();
+    }
+
+    @Test
+    void shouldApproveExtraSeat_LookUpPolicyWithDepartureHour() {
+        // Given
+        givenTripOnRouteNearlyFull();
+        when(configService.getOverbookingMaxPercentage()).thenReturn(0.05);
+
+        // When
+        overbookingService.approveExtraSeat(1L);
+
+        // Then: se busca la franja que contiene la hora de salida del viaje
+        verify(overbookingPolicyRepository).findApplicablePolicy(5L, trip.getDepartureTime().getHour());
+    }
+
+    @Test
+    void shouldApproveExtraSeat_WithTripWithoutRoute_UseConfigWithoutQueryingPolicies() {
+        // Given
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+        when(ticketRepository.countSoldSeats(1L)).thenReturn(40L);
+        when(configService.getOverbookingMaxPercentage()).thenReturn(0.05);
+
+        // When
+        overbookingService.approveExtraSeat(1L);
+
+        // Then
+        verifyNoInteractions(overbookingPolicyRepository);
     }
 }

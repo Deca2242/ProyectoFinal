@@ -485,5 +485,34 @@ class AssignmentServiceImplTest {
         verify(assignmentRepository).findByDispatcherId(eq(2L), dateCaptor.capture());
         assertThat(dateCaptor.getValue()).isEqualTo(LocalDate.now());
     }
-}
 
+    @Test
+    void shouldGetDispatcherAssignments_WithDate_FilterByThatDate() {
+        // Given
+        LocalDate date = LocalDate.of(2026, 12, 20);
+        List<Assignment> assignments = List.of(assignment);
+        when(assignmentRepository.findDispatcherAssignmentsForDate(2L, date)).thenReturn(assignments);
+        when(assignmentMapper.toResponseList(assignments)).thenReturn(List.of(assignmentResponse));
+
+        // When
+        List<AssignmentResponse> result = assignmentService.getDispatcherAssignments(2L, date);
+
+        // Then
+        assertThat(result).containsExactly(assignmentResponse);
+        verify(assignmentRepository, never()).findByDispatcherId(anyLong(), any());
+    }
+
+    @Test
+    void shouldGetDispatcherAssignments_WithNullDate_ReturnFromToday() {
+        // Given
+        when(assignmentRepository.findByDispatcherId(2L, LocalDate.now())).thenReturn(List.of());
+        when(assignmentMapper.toResponseList(List.of())).thenReturn(List.of());
+
+        // When
+        List<AssignmentResponse> result = assignmentService.getDispatcherAssignments(2L, null);
+
+        // Then
+        assertThat(result).isEmpty();
+        verify(assignmentRepository, never()).findDispatcherAssignmentsForDate(anyLong(), any());
+    }
+}

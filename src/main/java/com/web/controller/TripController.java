@@ -5,6 +5,7 @@ import com.web.dto.trip.SeatStatusResponse;
 import com.web.dto.trip.TripCreateRequest;
 import com.web.dto.trip.TripDetailResponse;
 import com.web.dto.trip.TripResponse;
+import com.web.dto.trip.TripUpdateRequest;
 import com.web.entity.Trip;
 import com.web.exception.BusinessException;
 import com.web.service.trip.TripService;
@@ -80,6 +81,15 @@ public class TripController {
             @RequestParam Trip.TripStatus status) {
         TripResponse response = tripService.updateTripStatus(id, status);
         return ResponseEntity.ok(response);
+    }
+
+    // Reprograma un viaje SCHEDULED (salida, llegada y/o bus)
+    @PutMapping("/{id}")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<TripResponse> rescheduleTrip(
+            @PathVariable Long id,
+            @RequestBody TripUpdateRequest request) {
+        return ResponseEntity.ok(tripService.rescheduleTrip(id, request));
     }
 
     @DeleteMapping("/{id}")

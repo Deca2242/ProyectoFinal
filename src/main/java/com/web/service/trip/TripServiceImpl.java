@@ -5,6 +5,7 @@ import com.web.dto.ticket.mapper.TicketMapper;
 import com.web.dto.trip.TripCreateRequest;
 import com.web.dto.trip.TripDetailResponse;
 import com.web.dto.trip.TripResponse;
+import com.web.dto.trip.TripUpdateRequest;
 import com.web.dto.trip.SeatAvailabilityResponse;
 import com.web.dto.trip.SeatStatusResponse;
 import com.web.dto.trip.mapper.TripMapper;
@@ -363,6 +364,72 @@ public class TripServiceImpl implements TripService {
                 return ticketMapper.toResponseList(tickets).stream()
                                 .map(TripServiceImpl::withoutEmail)
                                 .toList();
+        }
+
+        // Reprograma un viaje SCHEDULED: salida, llegada y/o bus. La fecha del viaje sigue a la nueva salida
+        @Override
+        @Transactional
+        public TripResponse rescheduleTrip(Long id, TripUpdateRequest request) {
+                Trip trip = tripRepository.findById(id)
+                                .orElseThrow(() -> new ResourceNotFoundException("Viaje", id));
+
+                if (trip.getStatus() != Trip.TripStatus.SCHEDULED) {
+                        throw new InvalidStateTransitionException(
+                                        "Solo se puede reprogramar un viaje SCHEDULED (estado actual: " + trip.getStatus() + ")");
+                }
+
+                if (request.departureTime() == null && request.arrivalEta() == null && request.busId() == null) {
+                        throw new BusinessException("Debe indicar la nueva salida, la llegada o el bus",
+                                        HttpStatus.BAD_REQUEST, "NOTHING_TO_UPDATE");
+                }
+
+                LocalDateTime departure = request.departureTime() != null ? request.departureTime() : trip.getDepartureTime();
+                LocalDateTime arrival = request.arrivalEta() != null ? request.arrivalEta() : trip.getArrivalEta();
+                if (arrival == null || !arrival.isAfter(departure)) {
+                        throw new BusinessException("La llegada debe ser posterior a la salida",
+                                        HttpStatus.BAD_REQUEST, "INVALID_DATES");
+                }
+                if (request.departureTime() != null && !departure.isAfter(LocalDateTime.now())) {
+                        throw new BusinessException("La nueva salida debe ser posterior al momento actual",
+                                        HttpStatus.BAD_REQUEST, "INVALID_DATES");
+                }
+
+                Bus bus = request.busId() != null
+                                ? busRepository.findById(request.busId())
+                                                .orElseThrow(() -> new ResourceNotFoundException("Bus", request.busId()))
+                                : trip.getBus();
+                if (bus.getStatus() != Bus.BusStatus.ACTIVE) {
+                        throw new BusinessException("El bus no está disponible", HttpStatus.BAD_REQUEST,
+                                        "BUS_NOT_AVAILABLE");
+                }
+
+                // Con el mismo bus y el mismo día el único viaje del bus es este; en otro caso el bus debe estar libre
+                LocalDate newDate = departure.toLocalDate();
+                boolean busChanged = !bus.getId().equals(trip.getBus().getId());
+                boolean dateChanged = !newDate.equals(trip.getTripDate());
+                if ((busChanged || dateChanged)
+                                && tripRepository.findBusIdsWithTripsOnDate(newDate).contains(bus.getId())) {
+                        throw new BusinessException("El bus ya tiene un viaje programado ese día",
+                                        HttpStatus.CONFLICT, "BUS_BUSY");
+                }
+
+                // Las sillas ya vendidas deben existir en el bus nuevo (capacidad + overbooking aprobado)
+                if (busChanged) {
+                        int sellableSeats = bus.getCapacity() + approvedOverbookingSeats(trip);
+                        boolean seatOutOfRange = ticketRepository.findByTripIdAndStatus(trip.getId(), Ticket.TicketStatus.SOLD)
+                                        .stream()
+                                        .anyMatch(t -> t.getSeatNumber() > sellableSeats);
+                        if (seatOutOfRange) {
+                                throw new BusinessException("Hay tiquetes vendidos en sillas que no existen en el bus nuevo",
+                                                HttpStatus.CONFLICT, "SEATS_EXCEED_CAPACITY");
+                        }
+                }
+
+                tripMapper.updateEntityFromRequest(request, trip);
+                trip.setTripDate(newDate);
+                trip.setBus(bus);
+
+                return tripMapper.toResponse(tripRepository.save(trip));
         }
 
         // Valida que la transición de estado del viaje sea permitida

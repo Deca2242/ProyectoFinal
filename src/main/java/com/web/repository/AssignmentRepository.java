@@ -71,6 +71,18 @@ public interface AssignmentRepository extends JpaRepository<Assignment, Long> {
         @Param("fromDate") LocalDate fromDate
     );
 
+    // Buscar asignaciones de un despachador para una fecha
+    @Query("""
+        SELECT a FROM Assignment a
+        WHERE a.dispatcher.id = :dispatcherId
+        AND a.trip.tripDate = :date
+        ORDER BY a.trip.departureTime
+    """)
+    List<Assignment> findDispatcherAssignmentsForDate(
+        @Param("dispatcherId") Long dispatcherId,
+        @Param("date") LocalDate date
+    );
+
     // Obtener asignación con detalles completos del viaje
     @Query("""
         SELECT a FROM Assignment a

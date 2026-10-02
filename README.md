@@ -21,7 +21,7 @@ Arquitectura por capas dentro del paquete `com.web`:
 
 ```
 controller/   Endpoints REST (validación con @Valid, autorización con @PreAuthorize)
-service/      Lógica de negocio por módulo: admin, auth, catalog, dispatch, parcel, payment, ticket, trip, user
+service/      Lógica de negocio por módulo: admin, auth, catalog, dispatch, incident, parcel, payment, ticket, trip, user
 repository/   Spring Data JPA (consultas derivadas y JPQL)
 entity/       Entidades JPA
 dto/          Records de request/response y mappers MapStruct por módulo
@@ -32,7 +32,7 @@ util/         JwtTokenProvider, OtpGenerator, QrCodeGenerator
 
 ### Entidades
 
-`User`, `Bus`, `Seat`, `Route`, `Stop`, `FareRule`, `Trip`, `Assignment`, `SeatHold`, `Ticket`, `Baggage`, `Parcel`, `Incident`, `Config`.
+`User`, `Bus`, `Seat`, `Route`, `Stop`, `FareRule`, `Trip`, `Assignment`, `SeatHold`, `Ticket`, `Baggage`, `Parcel`, `Incident`, `Config`, `OverbookingPolicy`.
 
 Estados principales:
 
@@ -46,10 +46,10 @@ Estados principales:
 | Rol | Qué puede hacer |
 |---|---|
 | `PASSENGER` | Buscar viajes, reservar asiento, comprar y cancelar sus tiquetes |
-| `CLERK` | Vender, confirmar pagos, registrar encomiendas, cierre de caja |
-| `DRIVER` | Ver su asignación, registrar el abordaje por QR, entregar encomiendas, dar salida al viaje |
-| `DISPATCHER` | Asignar bus/conductor, checklist, abrir/cerrar abordaje, ver ocupación |
-| `ADMIN` | Catálogo (rutas, paradas, buses), viajes, configuración y creación de usuarios con rol |
+| `CLERK` | Vender, confirmar pagos, registrar encomiendas, cierre de caja, reportar incidentes |
+| `DRIVER` | Ver sus asignaciones, registrar el abordaje por QR, entregar encomiendas, dar salida al viaje, reportar incidentes |
+| `DISPATCHER` | Asignar bus/conductor, checklist, abrir/cerrar abordaje, ver ocupación, % de overbooking por ruta y franja, reportar y consultar incidentes |
+| `ADMIN` | Catálogo (rutas, paradas, buses, tarifas), viajes y su reprogramación, configuración, gestión de usuarios (alta con rol, estado y rol), consulta de incidentes |
 
 El registro público (`/api/v1/auth/register`) siempre crea usuarios `PASSENGER`; solo un `ADMIN` autenticado puede registrar otros roles.
 
@@ -57,8 +57,14 @@ El registro público (`/api/v1/auth/register`) siempre crea usuarios `PASSENGER`
 
 - **Venta por tramos:** un asiento puede venderse varias veces en el mismo viaje si los tramos no se solapan. El solapamiento se calcula con el **orden** de las paradas (`desde < hastaOtro && hasta > desdeOtro`).
 - **Reserva temporal (hold):** bloquea el asiento **solo en el tramo solicitado** (`fromStopId` → `toStopId`) durante `hold.duration.minutes` (10 por defecto). Solo se permite en viajes `SCHEDULED`. Si el mismo usuario reserva otro tramo que se solapa, el hold anterior se reemplaza. Al comprar, los holds del pasajero pasan a `SOLD`. Una tarea programada expira los holds vencidos cada 60 s.
-- **Overbooking controlado:** las sillas por encima de la capacidad solo se venden si un **DISPATCHER** las aprueba (`POST /trips/{id}/overbooking/approve`). Cada aprobación suma **una** silla, siempre que la ocupación supere el 95 % y falten menos de 30 minutos para la salida, hasta `capacidad × overbooking.max.percentage` (5 % por defecto). Cada aprobación queda registrada como incidente `OVERBOOK`. Sin aprobación, la compra responde **403**
+- **Overbooking controlado:** las sillas por encima de la capacidad solo se venden si un **DISPATCHER** las aprueba (`POST /trips/{id}/overbooking/approve`). Cada aprobación suma **una** silla, siempre que la ocupación supere el 95 % y falten menos de 30 minutos para la salida, hasta `capacidad × porcentaje máximo`. El porcentaje es el de la **política de la ruta** cuya franja contiene la hora de salida (`start_hour <= hora < end_hour`) y, si no hay, `overbooking.max.percentage` (5 % por defecto). Cada aprobación queda registrada como incidente `OVERBOOK`. Sin aprobación, la compra responde **403**
+- **% de overbooking por ruta y franja horaria:** un DISPATCHER o ADMIN define franjas `[startHour, endHour)` (0–23 / 1–24, inicio < fin) con un porcentaje entre 0 y 1 (`0.10` = 10 %). Las franjas de una misma ruta no se pueden solapar (**409**)
 - **Tarifas y precio dinámico:** si existe una `FareRule` para el tramo, se usa su precio base y sus descuentos. Los multiplicadores por demanda (ocupación **del tramo** > 60 % u 80 %) y por hora pico solo se aplican si la regla tiene `dynamicPricing` activo, o si no hay regla. Descuentos válidos: `STUDENT`, `SENIOR` y `CHILD` (0–100 %); `ADULT` o vacío va sin descuento, y cualquier otro tipo responde 400
+- **Gestión de tarifas (ADMIN):** una `FareRule` por tramo (ruta, origen, destino); duplicarla responde **409**. Las paradas deben ser de la ruta y en orden (`origen < destino`), el precio base mayor que 0 y los descuentos solo `STUDENT`/`SENIOR`/`CHILD` con valores de 0 a 100 (las claves se guardan en mayúsculas). La consulta de tarifas de una ruta es pública
+- **Gestión de usuarios (ADMIN):** listado filtrable por rol y estado (nunca incluye el hash), cambio de estado y de rol. Un ADMIN no puede desactivarse ni cambiarse el rol a sí mismo (**400**). Un usuario desactivado no puede iniciar sesión y su token deja de funcionar en la siguiente petición; el cambio de rol aplica también de inmediato (el rol se lee de la BD). Cualquier autenticado consulta su perfil (`/users/me`) y cambia su contraseña indicando la actual (**400** si no coincide; la nueva, mínimo 8 caracteres)
+- **Incidentes:** DRIVER, DISPATCHER y CLERK reportan incidentes `SECURITY`, `VEHICLE`, `DELIVERY_FAIL` u `OVERBOOK` sobre un viaje, tiquete o encomienda existente (**404** si no existe); quien reporta es el usuario autenticado. ADMIN y DISPATCHER los consultan con filtros por tipo, entidad y fechas (`from`/`to` inclusivas). Un incidente **no cambia el estado** de la entidad: un incidente `VEHICLE` o `SECURITY` sobre un viaje `DEPARTED` solo queda registrado (el estado opcional `INCIDENT` del diagrama no se implementa)
+- **Reprogramación de viajes (ADMIN):** solo viajes `SCHEDULED` (**422** en otro estado). Se puede cambiar la salida, la llegada y el bus; la fecha del viaje se toma de la nueva salida. La llegada debe ser posterior a la salida y la nueva salida, futura. El bus debe estar `ACTIVE` y libre ese día (sin contar el propio viaje), y si ya hay tiquetes en sillas que no existen en el bus nuevo (capacidad + overbooking aprobado) responde **409**
+- **Asignaciones por usuario:** el conductor consulta las suyas (`/assignments/me`, todas o de una fecha) y el despachador las que hizo (`/assignments`, desde hoy o de una fecha)
 - **Cancelación de tiquetes:** reembolso escalonado según la anticipación (48 h, 24 h, 12 h, 6 h, menos de 6 h). No se puede cancelar si el viaje ya salió o si el pasajero ya abordó.
 - **Cancelación de viajes:** al cancelar un viaje se cancelan todos sus tiquetes vendidos con reembolso del 100 % y se liberan sus holds activos.
 - **Abordaje y no-show:** el conductor asignado o un despachador registra el abordaje escaneando el QR (`boardedAt`). Se permite con el viaje en `BOARDING` y también en `DEPARTED`, para quien sube en paradas intermedias. Los tiquetes sin abordar de la parada de origen pasan a `NO_SHOW` y se les registra el fee configurable (`no.show.fee`) en tres momentos: al cerrar el abordaje, al dar salida y, cada 5 minutos, cuando faltan 5 minutos o menos para salir con el abordaje abierto. Si el pasajero llega antes de la salida y su silla no se revendió, puede abordar igual y se le anula el no-show
@@ -82,11 +88,18 @@ Base: `/api/v1`. Todos, salvo los marcados como públicos, requieren `Authorizat
 | GET | `/routes`, `/routes/{id}`, `/routes/{id}/stops` | Público |
 | POST / PUT / DELETE | `/routes`, `/routes/{id}` | ADMIN |
 | POST / DELETE | `/routes/{routeId}/stops`, `/routes/{routeId}/stops/{stopId}` | ADMIN |
+| GET | `/routes/{routeId}/fares` (tarifas por tramo) | Público |
+| POST | `/routes/{routeId}/fares` | ADMIN |
+| PUT / DELETE | `/fares/{id}` | ADMIN |
+| GET / POST | `/routes/{routeId}/overbooking-policies` (% de overbooking por franja) | DISPATCHER, ADMIN |
+| DELETE | `/overbooking-policies/{id}` | DISPATCHER, ADMIN |
 | GET | `/buses`, `/buses/{id}`, `/buses/plate/{plate}`, `/buses/available` | ADMIN, DISPATCHER |
 | POST / PUT / DELETE | `/buses`, `/buses/{id}` | ADMIN |
 | GET | `/trips`, `/trips/{id}`, `/trips/{id}/seats` | Público |
 | GET | `/trips/{tripId}/passengers` | DRIVER, DISPATCHER |
-| POST / PUT / DELETE | `/trips`, `/trips/{id}/status`, `/trips/{id}` | ADMIN |
+| POST / PUT | `/trips`, `/trips/{id}/status` | ADMIN |
+| DELETE | `/trips/{id}` (cancelar) | ADMIN |
+| PUT | `/trips/{id}` (reprogramar: salida, llegada, bus) | ADMIN |
 | POST | `/trips/{tripId}/seats/{seatNumber}/hold` | Autenticado |
 | POST | `/trips/{tripId}/tickets` | Autenticado |
 | POST | `/tickets/{id}/cancel` | Autenticado |
@@ -100,6 +113,14 @@ Base: `/api/v1`. Todos, salvo los marcados como públicos, requieren `Authorizat
 | POST | `/trips/{tripId}/depart`, `/trips/{tripId}/arrive` | DRIVER (asignado) |
 | POST | `/trips/{tripId}/overbooking/approve` | DISPATCHER |
 | GET | `/trips/{tripId}/baggage` (conteo de equipaje) | DISPATCHER, DRIVER, CLERK |
+| GET | `/assignments/me?date=` (asignaciones del conductor autenticado) | DRIVER |
+| GET | `/assignments?date=` (asignaciones hechas por el despachador autenticado) | DISPATCHER |
+| POST | `/incidents` | DRIVER, DISPATCHER, CLERK |
+| GET | `/incidents?type=&entityType=&entityId=&from=&to=` | ADMIN, DISPATCHER |
+| GET | `/admin/users?role=&status=` | ADMIN |
+| PATCH | `/admin/users/{id}/status`, `/admin/users/{id}/role` | ADMIN |
+| GET | `/users/me` | Autenticado |
+| PUT | `/users/me/password` | Autenticado |
 | GET / POST | `/parcels` | CLERK, ADMIN |
 | GET | `/parcels/{code}/track` | Público |
 | POST | `/parcels/{code}/deliver` | DRIVER, CLERK |
@@ -118,7 +139,7 @@ Todas las excepciones pasan por `GlobalExceptionHandler`:
 - `403`: rol insuficiente, conductor no asignado o política de overbooking.
 - `404`: recurso o ruta inexistente.
 - `405` / `415`: método HTTP o tipo de contenido no soportado.
-- `409`: conflicto: silla ocupada, hold activo, bus ocupado ese día o dato duplicado.
+- `409`: conflicto: silla ocupada, hold activo, bus ocupado ese día, tarifa duplicada para el tramo, franja de overbooking solapada, sillas vendidas fuera del bus nuevo al reprogramar o dato duplicado.
 - `422`: transición de estado inválida.
 - `500`: error genérico, sin exponer detalles internos.
 
@@ -156,6 +177,7 @@ La API queda en `http://localhost:8080`.
 | `V4__add_ticket_boarding_and_segment_holds.sql` | Columna `tickets.boarded_at` (registro de abordaje) y `seat_holds.from_stop_id`/`to_stop_id` (holds por tramo) |
 | `V5__reset_seed_user_passwords.sql` | Asigna a los usuarios de prueba la contraseña conocida `Password123` |
 | `V6__cash_noshow_overbooking_and_punctuality.sql` | Reembolso, fecha de cancelación, fee de no-show y canal en `tickets`; horas reales de salida y llegada y sillas de overbooking aprobadas en `trips` |
+| `V10__overbooking_policies.sql` | Tabla `overbooking_policies`: % máximo de overbooking por ruta y franja horaria de salida |
 
 ### Usuarios de prueba
 
@@ -263,6 +285,3 @@ Estos puntos no se modificaron porque requieren decisiones de negocio:
 - **Funcionalidad del documento aún no implementada:**
   - notificaciones simuladas por WhatsApp/SMS;
   - operación offline de taquilla y conductor con `pendingSync` y reconciliación;
-  - % de overbooking por ruta y hora;
-  - CRUD de tarifas (`FareRule`), usuarios e incidentes;
-  - reprogramación de viajes.

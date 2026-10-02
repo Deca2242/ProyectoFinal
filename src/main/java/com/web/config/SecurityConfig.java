@@ -53,6 +53,7 @@ public class SecurityConfig {
                         // Endpoints públicos
                         .requestMatchers("/api/v1/auth/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/routes", "/api/v1/routes/*", "/api/v1/routes/*/stops").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/routes/*/fares").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/trips", "/api/v1/trips/*", "/api/v1/trips/*/seats").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/parcels/*/track").permitAll()
                         .requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/swagger-ui.html").permitAll()
@@ -66,10 +67,14 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.PUT, "/api/v1/buses/*").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.DELETE, "/api/v1/buses/*").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.GET, "/api/v1/buses/**").hasAnyRole("ADMIN", "DISPATCHER")
+                        .requestMatchers(HttpMethod.POST, "/api/v1/routes/*/fares").hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.PUT, "/api/v1/fares/*").hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.DELETE, "/api/v1/fares/*").hasRole("ADMIN")
 
                         // Admin - Gestión de trips
                         .requestMatchers(HttpMethod.POST, "/api/v1/trips").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.PUT, "/api/v1/trips/*/status").hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.PUT, "/api/v1/trips/*").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.DELETE, "/api/v1/trips/*").hasRole("ADMIN")
 
                         // Dispatch
@@ -82,6 +87,13 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.PUT, "/api/v1/trips/*/platform").hasRole("DISPATCHER")
                         .requestMatchers(HttpMethod.POST, "/api/v1/trips/*/overbooking/approve").hasRole("DISPATCHER")
                         .requestMatchers(HttpMethod.GET, "/api/v1/trips/*/baggage").hasAnyRole("DISPATCHER", "DRIVER", "CLERK")
+
+                        // Asignaciones del usuario autenticado, overbooking por ruta y franja, incidentes
+                        .requestMatchers(HttpMethod.GET, "/api/v1/assignments/me").hasRole("DRIVER")
+                        .requestMatchers(HttpMethod.GET, "/api/v1/assignments").hasRole("DISPATCHER")
+                        .requestMatchers("/api/v1/routes/*/overbooking-policies", "/api/v1/overbooking-policies/*").hasAnyRole("DISPATCHER", "ADMIN")
+                        .requestMatchers(HttpMethod.POST, "/api/v1/incidents").hasAnyRole("DRIVER", "DISPATCHER", "CLERK")
+                        .requestMatchers(HttpMethod.GET, "/api/v1/incidents").hasAnyRole("ADMIN", "DISPATCHER")
 
                         // Parcels
                         .requestMatchers(HttpMethod.GET, "/api/v1/parcels").hasAnyRole("CLERK", "ADMIN")
@@ -103,6 +115,9 @@ public class SecurityConfig {
                         .requestMatchers("/api/v1/trips/*/seats/*/hold").authenticated()
                         .requestMatchers("/api/v1/trips/*/tickets").authenticated()
                         .requestMatchers("/api/v1/tickets/**").authenticated()
+
+                        // Perfil del usuario autenticado (la gestión de usuarios va bajo /api/v1/admin/**)
+                        .requestMatchers("/api/v1/users/me", "/api/v1/users/me/**").authenticated()
 
                         // Resto requiere autenticación
                         .anyRequest().authenticated()

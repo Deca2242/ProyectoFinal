@@ -8,6 +8,7 @@ import com.web.exception.BusinessException;
 import com.web.exception.OverbookingNotAllowedException;
 import com.web.exception.ResourceNotFoundException;
 import com.web.repository.IncidentRepository;
+import com.web.repository.OverbookingPolicyRepository;
 import com.web.repository.TicketRepository;
 import com.web.repository.TripRepository;
 import com.web.repository.UserRepository;
@@ -23,7 +24,8 @@ import java.time.LocalDateTime;
 
 /**
  * Overbooking controlado (regla 4 / caso de uso 3): con ocupación mayor al 95 % y menos de 30 minutos
- * para la salida, un DISPATCHER aprueba de a una silla extra, hasta el porcentaje máximo configurado.
+ * para la salida, un DISPATCHER aprueba de a una silla extra, hasta el porcentaje máximo de la política
+ * de la ruta para la hora de salida (o el general de la configuración si no hay).
  * Cada aprobación queda registrada como incidente OVERBOOK.
  */
 @Service
@@ -38,6 +40,7 @@ public class OverbookingServiceImpl implements OverbookingService {
     private final IncidentRepository incidentRepository;
     private final UserRepository userRepository;
     private final ConfigService configService;
+    private final OverbookingPolicyRepository overbookingPolicyRepository;
 
     @Override
     @Transactional
@@ -71,7 +74,7 @@ public class OverbookingServiceImpl implements OverbookingService {
                     "El overbooking requiere una ocupación mayor al 95%% (actual: %.1f%%)", occupancy * 100));
         }
 
-        int maxExtra = (int) Math.floor(capacity * configService.getOverbookingMaxPercentage() + 1e-9);
+        int maxExtra = (int) Math.floor(capacity * maxPercentage(trip) + 1e-9);
         int approved = trip.getOverbookingApprovedSeats() == null ? 0 : trip.getOverbookingApprovedSeats();
         if (approved >= maxExtra) {
             throw new OverbookingNotAllowedException(
@@ -102,5 +105,16 @@ public class OverbookingServiceImpl implements OverbookingService {
                 approved + 1,
                 maxExtra,
                 capacity + approved + 1);
+    }
+
+    // % de la política de la ruta cuya franja contiene la hora de salida; si no hay, el de la configuración
+    private double maxPercentage(Trip trip) {
+        if (trip.getRoute() != null && trip.getRoute().getId() != null) {
+            return overbookingPolicyRepository
+                    .findApplicablePolicy(trip.getRoute().getId(), trip.getDepartureTime().getHour())
+                    .map(policy -> policy.getMaxPercentage().doubleValue())
+                    .orElseGet(configService::getOverbookingMaxPercentage);
+        }
+        return configService.getOverbookingMaxPercentage();
     }
 }

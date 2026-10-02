@@ -904,15 +904,18 @@ class MapperTest {
     }
 
     @Test
-    void tripMapper_ShouldUpdateStatus_WhenProvided() {
-        // Given
-        TripUpdateRequest request = new TripUpdateRequest(null, null, Trip.TripStatus.CANCELLED);
+    void tripMapper_ShouldNotChangeStatusOrBus_OnReschedule() {
+        // Given: el bus se valida y asigna en el servicio; el estado no se cambia por la reprogramación
+        LocalDateTime newDeparture = DEPARTURE.plusHours(2);
+        TripUpdateRequest request = new TripUpdateRequest(newDeparture, null, 999L);
 
         // When
         tripMapper.updateEntityFromRequest(request, trip);
 
         // Then
-        assertThat(trip.getStatus()).isEqualTo(Trip.TripStatus.CANCELLED);
+        assertThat(trip.getDepartureTime()).isEqualTo(newDeparture);
+        assertThat(trip.getStatus()).isEqualTo(Trip.TripStatus.BOARDING);
+        assertThat(trip.getBus()).isSameAs(bus);
         assertThat(trip.getArrivalEta()).isEqualTo(ARRIVAL);
     }
 
