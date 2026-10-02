@@ -28,6 +28,7 @@ import com.web.repository.SeatHoldRepository;
 import com.web.repository.StopRepository;
 import com.web.repository.TicketRepository;
 import com.web.repository.TripRepository;
+import com.web.service.notification.NotificationService;
 import com.web.util.SecurityUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -55,6 +56,7 @@ public class TripServiceImpl implements TripService {
         private final IncidentRepository incidentRepository;
         private final TripMapper tripMapper;
         private final TicketMapper ticketMapper;
+        private final NotificationService notificationService;
 
         // Crea un nuevo viaje validando que el bus esté disponible
         @Override
@@ -281,6 +283,8 @@ public class TripServiceImpl implements TripService {
         // y se liberan los holds activos
         private void releaseTicketsAndHolds(Trip trip) {
                 LocalDateTime now = LocalDateTime.now();
+                // Aviso a los pasajeros antes de cancelar sus tickets (solo se notifica a los que siguen SOLD)
+                notificationService.notifyTripCancelled(trip);
                 List<Ticket> soldTickets = ticketRepository.findByTripIdAndStatus(trip.getId(), Ticket.TicketStatus.SOLD);
                 for (Ticket ticket : soldTickets) {
                         ticket.setStatus(Ticket.TicketStatus.CANCELLED);

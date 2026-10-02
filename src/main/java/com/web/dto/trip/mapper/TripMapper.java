@@ -51,6 +51,8 @@ public interface TripMapper {
     @Mapping(target = "departedAt", ignore = true)
     @Mapping(target = "arrivedAt", ignore = true)
     @Mapping(target = "overbookingApprovedSeats", ignore = true)
+    @Mapping(target = "platform", ignore = true)
+    @Mapping(target = "arrivalNotified", ignore = true)
     @Mapping(target = "assignment", ignore = true)
     Trip toEntity(TripCreateRequest request);
     
@@ -67,6 +69,8 @@ public interface TripMapper {
     @Mapping(target = "departedAt", ignore = true)
     @Mapping(target = "arrivedAt", ignore = true)
     @Mapping(target = "overbookingApprovedSeats", ignore = true)
+    @Mapping(target = "platform", ignore = true)
+    @Mapping(target = "arrivalNotified", ignore = true)
     @BeanMapping(nullValuePropertyMappingStrategy = NullValuePropertyMappingStrategy.IGNORE)
     void updateEntityFromRequest(TripUpdateRequest request, @MappingTarget Trip trip);
 }

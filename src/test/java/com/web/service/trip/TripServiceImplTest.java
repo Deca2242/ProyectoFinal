@@ -67,6 +67,9 @@ class TripServiceImplTest {
     @Mock
     private com.web.repository.IncidentRepository incidentRepository;
 
+    @Mock
+    private com.web.service.notification.NotificationService notificationService;
+
     @InjectMocks
     private TripServiceImpl tripService;
 

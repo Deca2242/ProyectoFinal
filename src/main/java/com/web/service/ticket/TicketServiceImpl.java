@@ -13,6 +13,7 @@ import com.web.exception.ResourceNotFoundException;
 import com.web.exception.SeatNotAvailableException;
 import com.web.repository.*;
 import com.web.service.admin.ConfigService;
+import com.web.service.notification.NotificationService;
 import com.web.util.QrCodeGenerator;
 import com.web.util.SecurityUtils;
 import lombok.RequiredArgsConstructor;
@@ -48,6 +49,7 @@ public class TicketServiceImpl implements TicketService {
     private final QrCodeGenerator qrCodeGenerator;
     private final ConfigService configService;
     private final AssignmentRepository assignmentRepository;
+    private final NotificationService notificationService;
 
     // Compra un ticket validando disponibilidad, calculando precio con descuentos y generando QR
     @Override
@@ -164,6 +166,9 @@ public class TicketServiceImpl implements TicketService {
         for (SeatHold hold : overlappingHolds) {
             seatHoldService.releaseHold(hold.getId());
         }
+
+        // Aviso simulado por WhatsApp/SMS con el QR; un fallo del envío no afecta la compra
+        notificationService.notifyTicketPurchased(ticket);
 
         return ticketMapper.toResponse(ticket);
     }

@@ -54,6 +54,15 @@ public class Trip {
     @Builder.Default
     private Integer overbookingApprovedSeats = 0;
 
+    // Andén de salida (se notifica a los pasajeros cuando cambia)
+    @Column(length = 20)
+    private String platform;
+
+    // Ya se envió el aviso de llegada próxima (evita repetirlo)
+    @Column(name = "arrival_notified", nullable = false)
+    @Builder.Default
+    private Boolean arrivalNotified = false;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     @Builder.Default
     private LocalDateTime createdAt = LocalDateTime.now();

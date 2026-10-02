@@ -69,6 +69,9 @@ class TicketServiceImplTest {
     @Mock
     private ConfigService configService;
 
+    @Mock
+    private com.web.service.notification.NotificationService notificationService;
+
     @InjectMocks
     private TicketServiceImpl ticketService;
 

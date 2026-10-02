@@ -138,4 +138,16 @@ public interface TripRepository extends JpaRepository<Trip, Long> {
     // serializa ventas, holds y aprobaciones de overbooking del mismo viaje para evitar doble venta
     @Query(value = "SELECT id FROM trips WHERE id = :id FOR UPDATE", nativeQuery = true)
     Optional<Long> lockById(@Param("id") Long id);
+
+    // Viajes en curso que llegan dentro de la ventana y aún no tienen aviso de llegada próxima
+    @Query("""
+                SELECT t FROM Trip t
+                WHERE t.status = 'DEPARTED'
+                AND t.arrivalNotified = false
+                AND t.arrivalEta BETWEEN :from AND :to
+            """)
+    List<Trip> findDepartedTripsArrivingBetween(
+        @Param("from") LocalDateTime from,
+        @Param("to") LocalDateTime to
+    );
 }

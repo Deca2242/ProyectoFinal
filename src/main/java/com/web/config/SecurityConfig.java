@@ -79,6 +79,7 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.PUT, "/api/v1/trips/*/assignment").hasRole("DISPATCHER")
                         .requestMatchers(HttpMethod.POST, "/api/v1/trips/*/depart").hasRole("DRIVER")
                         .requestMatchers(HttpMethod.POST, "/api/v1/trips/*/arrive").hasRole("DRIVER")
+                        .requestMatchers(HttpMethod.PUT, "/api/v1/trips/*/platform").hasRole("DISPATCHER")
                         .requestMatchers(HttpMethod.POST, "/api/v1/trips/*/overbooking/approve").hasRole("DISPATCHER")
                         .requestMatchers(HttpMethod.GET, "/api/v1/trips/*/baggage").hasAnyRole("DISPATCHER", "DRIVER", "CLERK")
 
