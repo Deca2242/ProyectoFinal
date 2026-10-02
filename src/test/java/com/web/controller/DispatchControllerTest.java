@@ -94,7 +94,7 @@ class DispatchControllerTest {
                 2L, "Dispatcher Name",
                 false, false, false,
                 LocalDateTime.now()
-        );
+        , null, null, null, null, null);
 
         when(assignmentService.assignTrip(any())).thenReturn(resp);
 
@@ -187,7 +187,7 @@ class DispatchControllerTest {
                 2L, "Dispatcher Name",
                 checklistOk, checklistOk, checklistOk,
                 LocalDateTime.now()
-        );
+        , null, null, null, null, null);
     }
 
     // POST /assign

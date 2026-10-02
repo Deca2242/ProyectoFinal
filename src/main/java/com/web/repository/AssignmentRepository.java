@@ -94,4 +94,20 @@ public interface AssignmentRepository extends JpaRepository<Assignment, Long> {
         WHERE a.id = :assignmentId
     """)
     Optional<Assignment> findByIdWithDetails(@Param("assignmentId") Long assignmentId);
+
+    // Igual que isDriverAvailable pero sin contar la asignación del propio viaje (reprogramación)
+    @Query("""
+        SELECT CASE WHEN COUNT(a) = 0 THEN true ELSE false END
+        FROM Assignment a
+        WHERE a.driver.id = :driverId
+        AND a.trip.id <> :tripId
+        AND a.trip.status NOT IN ('ARRIVED', 'CANCELLED')
+        AND a.trip.departureTime < :arrivalEta
+        AND a.trip.arrivalEta > :departureTime
+    """)
+    boolean isDriverAvailableExcludingTrip(
+        @Param("driverId") Long driverId,
+        @Param("tripId") Long tripId,
+        @Param("departureTime") java.time.LocalDateTime departureTime,
+        @Param("arrivalEta") java.time.LocalDateTime arrivalEta);
 }

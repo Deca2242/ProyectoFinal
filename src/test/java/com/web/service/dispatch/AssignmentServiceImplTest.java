@@ -92,7 +92,7 @@ class AssignmentServiceImplTest {
                 2L, "Dispatcher Name",
                 false, false, false,
                 LocalDateTime.now()
-        );
+        , null, null, null, null, null);
     }
 
     @Test

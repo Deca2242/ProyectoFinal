@@ -18,6 +18,11 @@ public interface AssignmentMapper {
     @Mapping(target = "driverPhone", source = "driver.phone")
     @Mapping(target = "dispatcherId", source = "dispatcher.id")
     @Mapping(target = "dispatcherName", source = "dispatcher.name")
+    @Mapping(target = "routeName", source = "trip.route.name")
+    @Mapping(target = "tripDate", source = "trip.tripDate")
+    @Mapping(target = "departureTime", source = "trip.departureTime")
+    @Mapping(target = "arrivalEta", source = "trip.arrivalEta")
+    @Mapping(target = "busPlate", source = "trip.bus.plate")
     AssignmentResponse toResponse(Assignment assignment);
     
     List<AssignmentResponse> toResponseList(List<Assignment> assignments);

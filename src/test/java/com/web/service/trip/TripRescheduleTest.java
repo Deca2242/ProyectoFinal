@@ -20,6 +20,10 @@ import com.web.repository.SeatHoldRepository;
 import com.web.repository.StopRepository;
 import com.web.repository.TicketRepository;
 import com.web.repository.TripRepository;
+import com.web.service.notification.NotificationService;
+import com.web.entity.Assignment;
+import com.web.entity.SeatHold;
+import com.web.entity.User;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -38,6 +42,7 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 // Reprogramación de viajes (ADMIN): solo SCHEDULED, fechas coherentes, bus activo y libre, sillas vendidas
@@ -70,6 +75,8 @@ class TripRescheduleTest {
     private TripMapper tripMapper;
     @Mock
     private TicketMapper ticketMapper;
+    @Mock
+    private NotificationService notificationService;
 
     @InjectMocks
     private TripServiceImpl tripService;
@@ -327,5 +334,62 @@ class TripRescheduleTest {
         // Then: busId igual al actual no consulta los tiquetes ni la disponibilidad
         verifyNoInteractions(ticketRepository);
         verify(tripRepository, never()).findBusIdsWithTripsOnDate(any());
+    }
+
+    // ---------- Conductor asignado, holds huérfanos y aviso a pasajeros ----------
+
+    @Test
+    void shouldReschedule_WithAssignedDriverBusyInNewSchedule_ThrowConflict() {
+        // Given
+        LocalDateTime newDeparture = DEPARTURE.plusHours(3);
+        LocalDateTime newArrival = ARRIVAL.plusHours(3);
+        User driver = User.builder().id(7L).build();
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+        when(assignmentRepository.findByTripId(1L)).thenReturn(Optional.of(Assignment.builder().trip(trip).driver(driver).build()));
+        when(assignmentRepository.isDriverAvailableExcludingTrip(7L, 1L, newDeparture, newArrival)).thenReturn(false);
+
+        // When/Then
+        assertThatThrownBy(() -> tripService.rescheduleTrip(1L, new TripUpdateRequest(newDeparture, newArrival, null)))
+                .isInstanceOf(BusinessException.class)
+                .extracting("code").isEqualTo("DRIVER_NOT_AVAILABLE");
+        verify(tripRepository, never()).save(any());
+        verifyNoInteractions(notificationService);
+    }
+
+    @Test
+    void shouldReschedule_WithNewTimes_NotifyPassengers() {
+        // Given: el conductor asignado sigue libre
+        LocalDateTime newDeparture = DEPARTURE.plusHours(1);
+        User driver = User.builder().id(7L).build();
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+        when(assignmentRepository.findByTripId(1L)).thenReturn(Optional.of(Assignment.builder().trip(trip).driver(driver).build()));
+        when(assignmentRepository.isDriverAvailableExcludingTrip(7L, 1L, newDeparture, ARRIVAL)).thenReturn(true);
+        when(tripRepository.save(trip)).thenReturn(trip);
+
+        // When
+        tripService.rescheduleTrip(1L, new TripUpdateRequest(newDeparture, null, null));
+
+        // Then
+        verify(notificationService).notifyTripRescheduled(trip);
+    }
+
+    @Test
+    void shouldReschedule_OnlyChangingBus_ReleaseHoldsAboveNewCapacityWithoutNotifying() {
+        // Given: el bus nuevo tiene 30 sillas; el hold de la silla 35 queda huérfano
+        SeatHold inRange = SeatHold.builder().seatNumber(10).status(SeatHold.HoldStatus.HOLD).build();
+        SeatHold orphan = SeatHold.builder().seatNumber(35).status(SeatHold.HoldStatus.HOLD).build();
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+        when(busRepository.findById(2L)).thenReturn(Optional.of(otherBus));
+        when(seatHoldRepository.findActiveHoldsByTrip(eq(1L), any(LocalDateTime.class))).thenReturn(List.of(inRange, orphan));
+        when(tripRepository.save(trip)).thenReturn(trip);
+
+        // When
+        tripService.rescheduleTrip(1L, new TripUpdateRequest(null, null, 2L));
+
+        // Then
+        assertThat(orphan.getStatus()).isEqualTo(SeatHold.HoldStatus.EXPIRED);
+        assertThat(inRange.getStatus()).isEqualTo(SeatHold.HoldStatus.HOLD);
+        verify(seatHoldRepository).saveAll(List.of(orphan));
+        verifyNoInteractions(notificationService);
     }
 }

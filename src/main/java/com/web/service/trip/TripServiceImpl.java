@@ -425,11 +425,42 @@ public class TripServiceImpl implements TripService {
                         }
                 }
 
+                // El conductor asignado debe seguir libre en el nuevo horario
+                boolean scheduleChanged = !departure.equals(trip.getDepartureTime()) || !arrival.equals(trip.getArrivalEta());
+                if (scheduleChanged) {
+                        assignmentRepository.findByTripId(trip.getId())
+                                        .filter(a -> a.getDriver() != null)
+                                        .ifPresent(a -> {
+                                                if (!assignmentRepository.isDriverAvailableExcludingTrip(
+                                                                a.getDriver().getId(), trip.getId(), departure, arrival)) {
+                                                        throw new BusinessException(
+                                                                        "El conductor asignado tiene otro viaje en el nuevo horario",
+                                                                        HttpStatus.CONFLICT, "DRIVER_NOT_AVAILABLE");
+                                                }
+                                        });
+                }
+
+                // Los holds activos sobre sillas que no existen en el bus nuevo se liberan
+                if (busChanged) {
+                        int sellableSeats = bus.getCapacity() + approvedOverbookingSeats(trip);
+                        List<SeatHold> orphanHolds = seatHoldRepository.findActiveHoldsByTrip(trip.getId(), LocalDateTime.now())
+                                        .stream()
+                                        .filter(h -> h.getSeatNumber() > sellableSeats)
+                                        .toList();
+                        orphanHolds.forEach(h -> h.setStatus(SeatHold.HoldStatus.EXPIRED));
+                        seatHoldRepository.saveAll(orphanHolds);
+                }
+
                 tripMapper.updateEntityFromRequest(request, trip);
                 trip.setTripDate(newDate);
                 trip.setBus(bus);
+                Trip saved = tripRepository.save(trip);
 
-                return tripMapper.toResponse(tripRepository.save(trip));
+                if (scheduleChanged) {
+                        notificationService.notifyTripRescheduled(saved);
+                }
+
+                return tripMapper.toResponse(saved);
         }
 
         // Valida que la transición de estado del viaje sea permitida

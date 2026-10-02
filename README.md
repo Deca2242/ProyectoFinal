@@ -73,6 +73,13 @@ El registro público (`/api/v1/auth/register`) siempre crea usuarios `PASSENGER`
 - **Encomiendas:** código de rastreo público (sin exponer el OTP) y entrega con OTP de 6 dígitos + foto. Un OTP inválido marca la encomienda como `FAILED` y registra un incidente.
 - **Despacho:** para dar salida, el viaje necesita una asignación con checklist, SOAT y revisión técnica vigentes. Solo el **conductor asignado** puede dar salida, registrar la llegada, validar QR y ver la lista de pasajeros de su viaje. Los estados `BOARDING` y `DEPARTED` solo se asignan por los endpoints de despacho, y las transiciones inválidas responden 422.
 - **Cierre de caja:** efectivo esperado del día = tiquetes en efectivo vendidos ese día (en cualquier estado, porque el dinero se recibió) + cobros por exceso de equipaje − reembolsos en efectivo de ese día. Se devuelve la diferencia contra el monto contado.
+- **Propiedad de los tiquetes:** un `PASSENGER` solo compra, reserva, consulta y cancela tiquetes a su propio nombre (403 en otro caso). La taquilla y el resto del personal pueden operar a nombre de terceros.
+- **Caja por cajero:** cada venta guarda quién la registró (`soldBy`). El cierre de caja solo cuenta las ventas en efectivo de quien cierra y los reembolsos de esas ventas.
+- **Asignaciones:** el despachador de la asignación es el usuario autenticado. El conductor debe estar activo y libre en ese horario (409 si no), también al cambiarlo o al reprogramar el viaje. El checklist solo se edita antes de la salida (422 después).
+- **Límites y visibilidad:** máximo 4 holds activos por usuario y viaje. El mapa de asientos marca como `HELD` los reservados en el tramo consultado. La lista de pasajeros no incluye el email.
+- **Catálogo:** no se puede quitar una parada usada por tiquetes, encomiendas, tarifas u holds (409). El email no distingue mayúsculas en el registro ni en el login.
+- **Notificaciones (mock WhatsApp/SMS):** se generan al comprar (con QR, silla, tramo y hora), al cambiar el andén, al reprogramar o cancelar el viaje y 15 minutos antes de la llegada (tarea programada, una sola vez por viaje). Se usa WhatsApp para celulares colombianos (empiezan por 3) y SMS para el resto. Un fallo del envío nunca bloquea la venta: queda registrado como `FAILED`. Al cancelar un viaje, sus encomiendas pendientes quedan `FAILED` con un incidente para reasignarlas.
+- **Operación offline:** la taquilla o el conductor guardan las ventas y abordajes sin conexión (`pendingSync`) y los envían por lote al recuperar señal. Cada venta lleva un `offlineClientId` generado en el dispositivo. Reenviar un lote no duplica nada (`DUPLICATE`), y si la silla ya se vendió en línea la venta queda como `CONFLICT`, registrada en `/sync/conflicts`. Cada venta se procesa en su propia transacción y conserva la hora real de venta (`soldAt`). Se acepta una venta hecha antes de la salida aunque se sincronice después; un `soldAt` futuro o posterior a la salida se rechaza.
 - **Concurrencia:** la compra, el hold y la aprobación de overbooking bloquean la fila del viaje (`SELECT … FOR UPDATE`). Dos peticiones simultáneas por la misma silla no pueden venderla dos veces.
 - **Métricas:** ocupación por viaje (promedio, p50 y p95), ingresos por método de pago y por canal (taquilla o app), puntualidad de salida y llegada, tasa de no-show, cancelaciones, incidentes y encomiendas entregadas vs fallidas por tramo.
 
@@ -126,7 +133,13 @@ Base: `/api/v1`. Todos, salvo los marcados como públicos, requieren `Authorizat
 | POST | `/parcels/{code}/deliver` | DRIVER, CLERK |
 | PUT | `/parcels/{code}/status` | CLERK, DRIVER |
 | POST | `/payments/confirm` | CLERK |
-| POST | `/cash/close` | CLERK, DRIVER |
+| POST | `/cash/close` (caja del usuario autenticado) | CLERK, DRIVER |
+| PUT | `/trips/{tripId}/platform` (cambio de andén, notifica a los pasajeros) | DISPATCHER |
+| GET | `/notifications/me` | Autenticado |
+| GET | `/admin/notifications?tripId=` | ADMIN |
+| POST | `/sync/tickets` (ventas offline) | CLERK, DRIVER |
+| POST | `/sync/boardings` (abordajes offline) | DRIVER, DISPATCHER |
+| GET | `/sync/conflicts?deviceId=` | CLERK, DRIVER, DISPATCHER, ADMIN |
 
 La documentación interactiva está en **Swagger UI**: `http://localhost:8080/swagger-ui.html` (OpenAPI en `/v3/api-docs`).
 
@@ -177,7 +190,11 @@ La API queda en `http://localhost:8080`.
 | `V4__add_ticket_boarding_and_segment_holds.sql` | Columna `tickets.boarded_at` (registro de abordaje) y `seat_holds.from_stop_id`/`to_stop_id` (holds por tramo) |
 | `V5__reset_seed_user_passwords.sql` | Asigna a los usuarios de prueba la contraseña conocida `Password123` |
 | `V6__cash_noshow_overbooking_and_punctuality.sql` | Reembolso, fecha de cancelación, fee de no-show y canal en `tickets`; horas reales de salida y llegada y sillas de overbooking aprobadas en `trips` |
+| `V7__ticket_seller.sql` | `tickets.sold_by_id`: quién registró la venta (cierre de caja por cajero) |
+| `V8__notifications_and_platform.sql` | Tabla `notifications`; `trips.platform` (andén) y `trips.arrival_notified` |
+| `V9__offline_sync.sql` | `tickets.offline_client_id` (único) y `synced_at`; tablas `sync_batches` y `sync_conflicts` |
 | `V10__overbooking_policies.sql` | Tabla `overbooking_policies`: % máximo de overbooking por ruta y franja horaria de salida |
+| `V11__fare_rules_unique_segment.sql` | Una sola tarifa por tramo de cada ruta (restricción única) |
 
 ### Usuarios de prueba
 
@@ -208,7 +225,7 @@ Todos usan la contraseña **`Password123`**. Es solo para desarrollo: en producc
 | Concurrencia | `ConcurrentSeatSaleIntegrationTest` | 8 compras u 8 holds simultáneos de la misma silla y tramo: solo uno gana |
 
 - Los tests de repositorio e integración usan **Testcontainers** (`postgres:15-alpine`) y se **omiten automáticamente** si no hay Docker (`@Testcontainers(disabledWithoutDocker = true)`).
-- **Estado actual:** 1230 tests, 0 fallos, ejecutados contra PostgreSQL real. Cobertura: 97 % de líneas y 95 % de ramas.
+- **Estado actual:** 1601 tests, 0 fallos, ejecutados contra PostgreSQL real. Cobertura: 98 % de líneas y 95 % de ramas.
 - **Cobertura:** JaCoCo genera el reporte en `target/site/jacoco/index.html` al ejecutar `./mvnw test`. Se excluyen las clases generadas `*MapperImpl`.
 
 ## Errores corregidos en la revisión
@@ -265,23 +282,21 @@ Todos usan la contraseña **`Password123`**. Es solo para desarrollo: en producc
 | Máquina de estados de encomiendas | `FAILED` es final: no hay reintentos que permitan probar el OTP por fuerza bruta |
 | Tabla de errores estándar | 403 para overbooking, 422 para transiciones de viaje y 404/405/415 para rutas y métodos |
 | Validaciones faltantes | Configuración, creación de viajes (ruta activa, bus libre, fechas coherentes), compra tras la salida y capacidad y peso positivos |
+| Notificaciones mock por WhatsApp/SMS (compra, cambio de andén, llegada próxima) | `NotificationService` y `PUT /trips/{id}/platform` |
+| Caso de uso 5 e historias CLERK y DRIVER: operación offline con reconciliación | `/sync/tickets`, `/sync/boardings` y `/sync/conflicts` |
+| Historia 6: % de overbooking por ruta y hora | `overbooking_policies` |
+| CRUD de tarifas, usuarios e incidentes; reprogramación de viajes; asignaciones por usuario | Endpoints de administración |
 
-## Pendiente de decisión
+## Decisiones tomadas
 
-Estos puntos no se modificaron porque requieren decisiones de negocio:
+- **Fee de no-show:** se cobra aparte del precio del tiquete, porque el documento dice "se cobra fee configurable". En las métricas suma como ingreso adicional.
+- **Descuentos de una tarifa (`FareRule.discounts`):** solo pueden cambiar el porcentaje de los tipos existentes (`STUDENT`, `SENIOR`, `CHILD`); no crean tipos nuevos.
+- **Venta a terceros:** solo el personal (CLERK, DRIVER, DISPATCHER, ADMIN) puede vender o reservar a nombre de otro pasajero.
+- **Encomiendas de un viaje cancelado:** quedan `FAILED` con un incidente `DELIVERY_FAIL`, para que la taquilla las reasigne.
+- **Sincronización offline:** una venta hecha antes de la salida se acepta aunque se sincronice después de que el bus salió.
 
-- **Propiedad de los tiquetes:** `GET /tickets/{id}` y `POST /tickets/{id}/cancel` no verifican que el tiquete sea del usuario autenticado. Además, la compra y el hold toman el `passengerId`/`userId` del body, así que un pasajero podría comprar o reservar a nombre de otro. Hay que definir si la taquilla vende en nombre de terceros y restringirlo al resto de roles.
-- **Cierre de caja por cajero:** `closeCash` suma el efectivo de todos los cajeros del día; no se puede cuadrar la caja de uno solo.
-- **Despacho:** `PUT /trips/{id}/assignment` permite modificar el checklist de un viaje que ya salió, y `assignTrip` toma el `dispatcherId` del body y no del usuario autenticado.
+## Limitaciones conocidas
+
 - **No-show en paradas intermedias:** no se marcan porque no hay hora estimada por parada.
-- **Otros puntos de la revisión senior (prioridad media o baja):**
-  - `assignTrip` no verifica si el conductor está activo o ya tiene otro viaje a esa hora (existe `isDriverAvailable` sin usar);
-  - no hay tope de holds por usuario;
-  - el mapa de asientos no muestra los que están reservados (`HELD`);
-  - al cancelar un viaje sus encomiendas no cambian de estado;
-  - el email distingue mayúsculas en el registro y el login;
-  - `removeStop` borra la parada físicamente;
-  - la lista de pasajeros incluye el email.
-- **Funcionalidad del documento aún no implementada:**
-  - notificaciones simuladas por WhatsApp/SMS;
-  - operación offline de taquilla y conductor con `pendingSync` y reconciliación;
+- **Envío real de notificaciones:** son simuladas (log y tabla `notifications`). Para producción habría que implementar `NotificationSender` con un proveedor real de WhatsApp/SMS.
+- **Cola del cliente offline:** la guarda el dispositivo (taquilla o app del conductor). El backend solo expone la reconciliación.
