@@ -46,6 +46,8 @@ class TripSeatMapAndParcelRulesTest {
     @Mock
     private IncidentRepository incidentRepository;
     @Mock
+    private com.web.service.notification.NotificationService notificationService;
+    @Mock
     private TripMapper tripMapper;
     @Mock
     private TicketMapper ticketMapper;
