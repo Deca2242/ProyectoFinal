@@ -72,6 +72,9 @@ class TicketOfflineSaleTest {
     @Mock
     private AssignmentRepository assignmentRepository;
 
+    @Mock
+    private com.web.service.notification.NotificationService notificationService;
+
     @InjectMocks
     private TicketServiceImpl ticketService;
 
