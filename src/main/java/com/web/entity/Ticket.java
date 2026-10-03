@@ -50,6 +50,16 @@ public class Ticket {
     @Builder.Default
     private TicketStatus status = TicketStatus.SOLD;
 
+    // Estado del pago: PENDING si el pasajero compró por la app y aún no paga (QR/transferencia
+    // confirmada por taquilla, o contraentrega en taquilla o al subir); PAID cuando se cobró
+    @Enumerated(EnumType.STRING)
+    @Column(name = "payment_status", nullable = false, length = 10)
+    @Builder.Default
+    private PaymentStatus paymentStatus = PaymentStatus.PAID;
+
+    @Column(name = "paid_at")
+    private LocalDateTime paidAt;
+
     @Column(name = "qr_code", unique = true, length = 255)
     private String qrCode;
 
@@ -99,6 +109,11 @@ public class Ticket {
         TRANSFER,
         QR,
         CARD
+    }
+
+    public enum PaymentStatus {
+        PENDING,
+        PAID
     }
 
     public enum SalesChannel {

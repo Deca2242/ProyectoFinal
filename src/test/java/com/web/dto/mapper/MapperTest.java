@@ -34,6 +34,7 @@ import com.web.dto.parcel.ParcelCreateRequest;
 import com.web.dto.parcel.ParcelResponse;
 import com.web.dto.parcel.mapper.ParcelMapper;
 import com.web.dto.parcel.mapper.ParcelMapperImpl;
+import com.web.dto.payment.CashCloseResponse;
 import com.web.dto.payment.PaymentResponse;
 import com.web.dto.payment.mapper.PaymentMapper;
 import com.web.dto.payment.mapper.PaymentMapperImpl;
@@ -54,7 +55,9 @@ import com.web.dto.trip.mapper.TripMapperImpl;
 import com.web.entity.Assignment;
 import com.web.entity.Baggage;
 import com.web.entity.Bus;
+import com.web.entity.CashClose;
 import com.web.entity.Parcel;
+import com.web.entity.Payment;
 import com.web.entity.Route;
 import com.web.entity.SeatHold;
 import com.web.entity.Stop;
@@ -1108,33 +1111,72 @@ class MapperTest {
     // ==================== PaymentMapper ====================
 
     @Test
-    void paymentMapper_ShouldBuildPaymentResponse_FromTicketAndParams() {
+    void paymentMapper_ShouldBuildReceipt_FromPaymentAndTicket() {
         // Given
         Ticket ticket = buildTicket();
+        ticket.setPaymentStatus(Ticket.PaymentStatus.PAID);
+        Payment payment = Payment.builder()
+                .id(77L).ticket(ticket).method(Ticket.PaymentMethod.TRANSFER)
+                .amount(new BigDecimal("25000")).transactionReference("TX-001")
+                .proofImageUrl("https://comprobantes/77.png").paidAt(CREATED_AT)
+                .confirmedBy(User.builder().id(5L).name("Carla Taquilla").build())
+                .build();
 
         // When
-        PaymentResponse response = paymentMapper.toPaymentResponse(ticket, "CONFIRMED", "TX-001");
+        PaymentResponse response = paymentMapper.toResponse(payment);
 
         // Then
+        assertThat(response.paymentId()).isEqualTo(77L);
+        assertThat(response.receiptNumber()).isEqualTo("RCP-77");
         assertThat(response.ticketId()).isEqualTo(200L);
-        assertThat(response.paymentMethod()).isEqualTo(Ticket.PaymentMethod.CARD);
+        assertThat(response.qrCode()).isEqualTo("QR-200");
+        assertThat(response.paymentMethod()).isEqualTo(Ticket.PaymentMethod.TRANSFER);
         assertThat(response.amount()).isEqualByComparingTo("25000");
-        assertThat(response.paidAt()).isEqualTo(CREATED_AT);
-        assertThat(response.status()).isEqualTo("CONFIRMED");
+        assertThat(response.paymentStatus()).isEqualTo(Ticket.PaymentStatus.PAID);
         assertThat(response.transactionReference()).isEqualTo("TX-001");
+        assertThat(response.proofImageUrl()).isEqualTo("https://comprobantes/77.png");
+        assertThat(response.paidAt()).isEqualTo(CREATED_AT);
+        assertThat(response.confirmedBy()).isEqualTo("Carla Taquilla");
     }
 
     @Test
-    void paymentMapper_ShouldHandleNullTicket_AndAllNullParams() {
+    void paymentMapper_ShouldHandleNullPayment_AndMissingRelations() {
+        // Given: pago sin id (aún no guardado) ni cajero
+        Payment payment = Payment.builder().method(Ticket.PaymentMethod.CASH).amount(BigDecimal.TEN).build();
+
         // When
-        PaymentResponse withoutTicket = paymentMapper.toPaymentResponse(null, "PENDING", null);
+        PaymentResponse response = paymentMapper.toResponse(payment);
 
         // Then
-        assertThat(withoutTicket).isNotNull();
-        assertThat(withoutTicket.ticketId()).isNull();
-        assertThat(withoutTicket.amount()).isNull();
-        assertThat(withoutTicket.status()).isEqualTo("PENDING");
-        assertThat(withoutTicket.transactionReference()).isNull();
-        assertThat(paymentMapper.toPaymentResponse(null, null, null)).isNull();
+        assertThat(response.receiptNumber()).isNull();
+        assertThat(response.ticketId()).isNull();
+        assertThat(response.confirmedBy()).isNull();
+        assertThat(paymentMapper.toResponse(null)).isNull();
+    }
+
+    @Test
+    void paymentMapper_ShouldMapCashClose_WithUserAndTotals() {
+        // Given
+        CashClose close = CashClose.builder()
+                .id(9L).user(User.builder().id(5L).name("Carla Taquilla").build())
+                .closeDate(TRIP_DATE).expectedAmount(new BigDecimal("50000"))
+                .actualAmount(new BigDecimal("48000")).difference(new BigDecimal("-2000"))
+                .totalsByMethod(Map.of("CASH", new BigDecimal("50000"), "QR", new BigDecimal("30000")))
+                .ticketsCount(2).refundsTotal(BigDecimal.ZERO).baggageTotal(BigDecimal.ZERO)
+                .notes("Faltante").closedAt(CREATED_AT).build();
+
+        // When
+        CashCloseResponse response = paymentMapper.toCashCloseResponse(close);
+
+        // Then
+        assertThat(response.id()).isEqualTo(9L);
+        assertThat(response.userId()).isEqualTo(5L);
+        assertThat(response.userName()).isEqualTo("Carla Taquilla");
+        assertThat(response.date()).isEqualTo(TRIP_DATE);
+        assertThat(response.difference()).isEqualByComparingTo("-2000");
+        assertThat(response.totalsByMethod()).containsEntry("QR", new BigDecimal("30000"));
+        assertThat(response.ticketCount()).isEqualTo(2);
+        assertThat(response.notes()).isEqualTo("Faltante");
+        assertThat(response.closedAt()).isEqualTo(CREATED_AT);
     }
 }

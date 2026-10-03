@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.web.dto.auth.Login.LoginRequest;
 import com.web.dto.auth.Login.LoginResponse;
 import com.web.dto.auth.Login.RegisterRequest;
+import com.web.dto.payment.PaymentConfirmRequest;
 import com.web.dto.ticket.TicketCancelResponse;
 import com.web.dto.ticket.TicketCreateRequest;
 import com.web.dto.ticket.TicketResponse;
@@ -74,6 +75,7 @@ class PassengerCancellationIntegrationTest extends BaseIntegrationTest {
         private FareRuleRepository fareRuleRepository;
 
         private String passengerToken;
+        private String clerkToken;
         private Long passengerId;
         private Long tripId48h;
         private Long tripId24h;
@@ -239,6 +241,25 @@ class PassengerCancellationIntegrationTest extends BaseIntegrationTest {
                                 LoginResponse.class);
                 passengerToken = loginResponse.token();
                 passengerId = loginResponse.user().id();
+
+                // Taquilla que confirma el pago de las compras por la app (solo un ticket pagado se reembolsa)
+                createUser(new RegisterRequest("Taquilla", "clerk@test.com", "1234567890", "password123", User.Role.CLERK));
+                MvcResult clerkLogin = mvc.perform(post("/api/v1/auth/login")
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .content(om.writeValueAsString(new LoginRequest("clerk@test.com", "password123"))))
+                                .andExpect(status().isOk())
+                                .andReturn();
+                clerkToken = om.readValue(clerkLogin.getResponse().getContentAsString(), LoginResponse.class).token();
+        }
+
+        // El pago con tarjeta de la compra por la app queda confirmado por la taquilla
+        private void confirmCardPayment(Long ticketId) throws Exception {
+                mvc.perform(post("/api/v1/payments/confirm")
+                                .header("Authorization", "Bearer " + clerkToken)
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .content(om.writeValueAsString(new PaymentConfirmRequest(
+                                                ticketId, Ticket.PaymentMethod.CARD, "DATAFONO-" + ticketId, null, null))))
+                                .andExpect(status().isOk());
         }
 
         // Verifica cancelación 48h+: comprar ticket para viaje en 3 días, cancelar, debe reembolsar 90%
@@ -262,6 +283,7 @@ class PassengerCancellationIntegrationTest extends BaseIntegrationTest {
                 TicketResponse ticketResponse = om.readValue(purchaseResult.getResponse().getContentAsString(),
                                 TicketResponse.class);
                 Long ticketId = ticketResponse.id();
+                confirmCardPayment(ticketId);
                 BigDecimal actualTicketPrice = ticketResponse.price();
 
                 // Cancelar ticket
@@ -303,6 +325,7 @@ class PassengerCancellationIntegrationTest extends BaseIntegrationTest {
                 TicketResponse ticketResponse = om.readValue(purchaseResult.getResponse().getContentAsString(),
                                 TicketResponse.class);
                 Long ticketId = ticketResponse.id();
+                confirmCardPayment(ticketId);
                 BigDecimal actualTicketPrice = ticketResponse.price();
 
                 // Cancelar ticket
@@ -343,6 +366,7 @@ class PassengerCancellationIntegrationTest extends BaseIntegrationTest {
                 TicketResponse ticketResponse = om.readValue(purchaseResult.getResponse().getContentAsString(),
                                 TicketResponse.class);
                 Long ticketId = ticketResponse.id();
+                confirmCardPayment(ticketId);
                 BigDecimal actualTicketPrice = ticketResponse.price();
 
                 // Cancelar ticket
@@ -383,6 +407,7 @@ class PassengerCancellationIntegrationTest extends BaseIntegrationTest {
                 TicketResponse ticketResponse = om.readValue(purchaseResult.getResponse().getContentAsString(),
                                 TicketResponse.class);
                 Long ticketId = ticketResponse.id();
+                confirmCardPayment(ticketId);
                 BigDecimal actualTicketPrice = ticketResponse.price();
 
                 // Cancelar ticket
@@ -423,6 +448,7 @@ class PassengerCancellationIntegrationTest extends BaseIntegrationTest {
                 TicketResponse ticketResponse = om.readValue(purchaseResult.getResponse().getContentAsString(),
                                 TicketResponse.class);
                 Long ticketId = ticketResponse.id();
+                confirmCardPayment(ticketId);
 
                 // Cancelar ticket
                 mvc.perform(post("/api/v1/tickets/{id}/cancel", ticketId)

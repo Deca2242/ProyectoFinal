@@ -14,6 +14,7 @@ import com.web.exception.SeatNotAvailableException;
 import com.web.repository.*;
 import com.web.service.admin.ConfigService;
 import com.web.service.notification.NotificationService;
+import com.web.service.payment.PaymentService;
 import com.web.util.QrCodeGenerator;
 import com.web.util.SecurityUtils;
 import lombok.RequiredArgsConstructor;
@@ -50,6 +51,7 @@ public class TicketServiceImpl implements TicketService {
     private final ConfigService configService;
     private final AssignmentRepository assignmentRepository;
     private final NotificationService notificationService;
+    private final PaymentService paymentService;
 
     // Compra un ticket validando disponibilidad, calculando precio con descuentos y generando QR
     @Override
@@ -149,7 +151,16 @@ public class TicketServiceImpl implements TicketService {
             ticket.setOfflineClientId(offline.offlineClientId());
             ticket.setSyncedAt(now);
         }
+        // [Pagos] El personal y las ventas offline cobran en el acto; el pasajero por la app queda pendiente de pago
+        boolean paidNow = offline != null || !SecurityUtils.hasRole("PASSENGER");
+        ticket.setPaymentStatus(paidNow ? Ticket.PaymentStatus.PAID : Ticket.PaymentStatus.PENDING);
+        ticket.setPaidAt(paidNow ? now : null);
+        User seller = ticket.getSoldBy();
         ticket = ticketRepository.save(ticket);
+        if (paidNow) {
+            paymentService.recordCounterPayment(ticket, seller);
+        }
+        // [Fin pagos]
 
         // Registrar equipaje si se solicitó, calculando cargo por exceso si supera el límite
         if (request.baggage() != null) {
@@ -223,7 +234,9 @@ public class TicketServiceImpl implements TicketService {
         long hoursUntilDeparture = timeUntilDeparture.toHours();
 
         // Calcular reembolso según políticas de cancelación configuradas
-        BigDecimal refundPercentage = calculateRefundPercentage(hoursUntilDeparture);
+        // [Pagos] Un ticket sin pagar (PENDING) no genera reembolso
+        BigDecimal refundPercentage = ticket.getPaymentStatus() == Ticket.PaymentStatus.PENDING
+                ? BigDecimal.ZERO : calculateRefundPercentage(hoursUntilDeparture);
         BigDecimal refundAmount = ticket.getPrice()
                 .multiply(refundPercentage)
                 .divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
@@ -321,6 +334,12 @@ public class TicketServiceImpl implements TicketService {
         if (ticket.getStatus() != Ticket.TicketStatus.SOLD) {
             throw new BusinessException("El ticket no es válido para abordar (estado: " + ticket.getStatus() + ")",
                     HttpStatus.BAD_REQUEST, "TICKET_NOT_VALID");
+        }
+
+        // [Pagos] Un ticket con el pago pendiente no puede abordar
+        if (ticket.getPaymentStatus() == Ticket.PaymentStatus.PENDING) {
+            throw new BusinessException("El ticket tiene el pago pendiente: debe pagarse antes de abordar",
+                    HttpStatus.CONFLICT, "PAYMENT_PENDING");
         }
 
         if (ticket.getBoardedAt() != null) {

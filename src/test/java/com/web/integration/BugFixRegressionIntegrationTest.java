@@ -8,6 +8,7 @@ import com.web.dto.catalog.Stop.StopCreateRequest;
 import com.web.dto.dispatch.Assignment.AssignmentCreateRequest;
 import com.web.dto.dispatch.Assignment.AssignmentUpdateRequest;
 import com.web.dto.parcel.ParcelCreateRequest;
+import com.web.dto.payment.PaymentConfirmRequest;
 import com.web.dto.ticket.TicketCreateRequest;
 import com.web.dto.ticket.reservations.SeatHoldRequest;
 import com.web.entity.*;
@@ -465,6 +466,7 @@ class BugFixRegressionIntegrationTest extends BaseIntegrationTest {
         tripRepository.saveAndFlush(boardingTrip);
         entityManager.clear();
 
+        payOnBoarding(driverToken, boardedId);
         board(driverToken, qr).andExpect(status().isOk())
                 .andExpect(jsonPath("$.boardedAt").isNotEmpty());
         board(driverToken, qr).andExpect(status().isConflict());
@@ -597,6 +599,16 @@ class BugFixRegressionIntegrationTest extends BaseIntegrationTest {
                 .header("Authorization", "Bearer " + token)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(om.writeValueAsString(new SeatHoldRequest(userId, from.getId(), to.getId()))));
+    }
+
+    // Contraentrega: el conductor asignado cobra al subir el ticket comprado por la app
+    private void payOnBoarding(String driverToken, Long ticketId) throws Exception {
+        mvc.perform(post("/api/v1/payments/confirm")
+                        .header("Authorization", "Bearer " + driverToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(om.writeValueAsString(new PaymentConfirmRequest(
+                                ticketId, Ticket.PaymentMethod.CASH, null, null, null))))
+                .andExpect(status().isOk());
     }
 
     private ResultActions board(String token, String qr) throws Exception {

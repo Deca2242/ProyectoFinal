@@ -3,14 +3,22 @@ package com.web.service.payment;
 import com.web.dto.payment.CashCloseRequest;
 import com.web.dto.payment.CashCloseResponse;
 import com.web.dto.payment.PaymentConfirmRequest;
-import com.web.dto.ticket.TicketResponse;
-import com.web.dto.ticket.mapper.TicketMapper;
+import com.web.dto.payment.PaymentResponse;
+import com.web.dto.payment.mapper.PaymentMapper;
+import com.web.dto.payment.mapper.PaymentMapperImpl;
+import com.web.entity.Assignment;
 import com.web.entity.Baggage;
+import com.web.entity.CashClose;
+import com.web.entity.Payment;
 import com.web.entity.Ticket;
 import com.web.entity.Trip;
 import com.web.entity.User;
 import com.web.exception.BusinessException;
+import com.web.exception.InvalidStateTransitionException;
 import com.web.exception.ResourceNotFoundException;
+import com.web.repository.AssignmentRepository;
+import com.web.repository.CashCloseRepository;
+import com.web.repository.PaymentRepository;
 import com.web.repository.TicketRepository;
 import com.web.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -18,8 +26,10 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 
@@ -43,126 +53,218 @@ class PaymentServiceImplTest {
     @Mock
     private UserRepository userRepository;
     @Mock
-    private TicketMapper ticketMapper;
+    private PaymentRepository paymentRepository;
+    @Mock
+    private CashCloseRepository cashCloseRepository;
+    @Mock
+    private AssignmentRepository assignmentRepository;
+    // Mapper real generado por MapStruct: las respuestas reflejan lo que se guardó
+    @Spy
+    private PaymentMapper paymentMapper = new PaymentMapperImpl();
 
     @InjectMocks
     private PaymentServiceImpl paymentService;
 
-    private Ticket ticket;
+    private static final LocalDate DAY = LocalDate.of(2026, 3, 15);
+
     private Trip trip;
-    private User user;
-    private TicketResponse ticketResponse;
+    private Ticket ticket;
+    private User clerk;
+    private User driver;
+    private User passenger;
 
     @BeforeEach
     void setUp() {
-        trip = Trip.builder()
-                .id(1L)
-                .tripDate(LocalDate.now())
-                .build();
+        trip = Trip.builder().id(1L).tripDate(LocalDate.now()).build();
+        passenger = User.builder().id(3L).name("Pasajero").email("pax@example.com").role(User.Role.PASSENGER).build();
+        clerk = User.builder().id(1L).name("Clerk").email("clerk@example.com").role(User.Role.CLERK).build();
+        driver = User.builder().id(2L).name("Driver").email("driver@example.com").role(User.Role.DRIVER).build();
 
+        // Compra del pasajero por la app: pendiente de pago
         ticket = Ticket.builder()
-                .id(1L)
+                .id(10L)
                 .trip(trip)
-                .price(BigDecimal.valueOf(50000))
+                .passenger(passenger)
+                .qrCode("QR-10")
+                .price(new BigDecimal("50000.00"))
                 .status(Ticket.TicketStatus.SOLD)
-                .paymentMethod(Ticket.PaymentMethod.CASH)
-                .soldBy(User.builder().id(1L).build())
+                .paymentMethod(Ticket.PaymentMethod.QR)
+                .paymentStatus(Ticket.PaymentStatus.PENDING)
                 .build();
-
-        user = User.builder()
-                .id(1L)
-                .name("Clerk")
-                .email("clerk@example.com")
-                .build();
-
-        ticketResponse = new TicketResponse(
-                1L, 1L, "Route Name", LocalDate.now(), LocalDateTime.now(),
-                1L, "Passenger", "passenger@example.com",
-                10, 1L, "Origin", 1, 2L, "Destination", 2,
-                BigDecimal.valueOf(50000), Ticket.PaymentMethod.CASH,
-                Ticket.TicketStatus.SOLD, "QR123", LocalDateTime.now(), null
-        , null);
     }
 
-    @Test
-    void shouldConfirmPayment_WithValidRequest_ReturnTicketResponse() {
-        // Given
-        PaymentConfirmRequest request = new PaymentConfirmRequest(
-                1L, Ticket.PaymentMethod.CARD, null, null, null
-        );
-
-        when(ticketRepository.findById(1L)).thenReturn(Optional.of(ticket));
-        when(ticketRepository.save(any(Ticket.class))).thenReturn(ticket);
-        when(ticketMapper.toResponse(any(Ticket.class))).thenReturn(ticketResponse);
-
-        // When
-        TicketResponse result = paymentService.confirmPayment(request);
-
-        // Then
-        assertThat(result).isNotNull();
-        verify(ticketRepository).save(argThat(t -> 
-            t.getPaymentMethod() == Ticket.PaymentMethod.CARD
-        ));
+    private PaymentConfirmRequest confirm(Ticket.PaymentMethod method, String reference, BigDecimal amount) {
+        return new PaymentConfirmRequest(10L, method, reference, amount, null);
     }
 
-    @Test
-    void shouldCloseCash_WithValidRequest_ReturnCashCloseResponse() {
-        // Given
-        CashCloseRequest request = new CashCloseRequest(
-                1L, LocalDate.now(), BigDecimal.valueOf(100000), BigDecimal.valueOf(100000), null
-        );
-
-        List<Ticket> cashTickets = List.of(ticket);
-
-        when(userRepository.findById(1L)).thenReturn(Optional.of(user));
-        when(ticketRepository.findCashTicketsPurchasedBetween(
-                LocalDate.now().atStartOfDay(), LocalDate.now().plusDays(1).atStartOfDay()))
-                .thenReturn(cashTickets);
-
-        // When
-        CashCloseResponse result = paymentService.closeCash(request, 1L);
-
-        // Then: el esperado lo calcula el sistema (1 ticket de 50000) y se compara con lo reportado
-        assertThat(result).isNotNull();
-        assertThat(result.id()).isEqualTo(1L);
-        assertThat(result.ticketCount()).isEqualTo(1);
-        assertThat(result.expectedAmount()).isEqualByComparingTo("50000");
-        assertThat(result.difference()).isEqualByComparingTo("50000");
-        verify(userRepository).findById(1L);
+    private void givenConfirmer(User user) {
+        when(userRepository.findById(user.getId())).thenReturn(Optional.of(user));
+        when(ticketRepository.findById(10L)).thenReturn(Optional.of(ticket));
     }
 
-    @Test
-    void shouldCloseCash_WithInvalidDateRange_ThrowException() {
-        // Given
-        CashCloseRequest request = new CashCloseRequest(
-                1L, LocalDate.now(), BigDecimal.valueOf(100000), BigDecimal.valueOf(100000), null
-        );
+    private void givenPaymentSaved() {
+        when(paymentRepository.save(any(Payment.class))).thenAnswer(inv -> {
+            Payment payment = inv.getArgument(0);
+            payment.setId(7L);
+            return payment;
+        });
+    }
 
-        when(userRepository.findById(1L)).thenReturn(Optional.empty());
-
-        // When/Then
-        assertThatThrownBy(() -> paymentService.closeCash(request, 1L))
-                .isInstanceOf(ResourceNotFoundException.class)
-                .hasMessageContaining("Usuario");
-        verifyNoInteractions(ticketRepository);
+    private static BusinessException business(Throwable ex) {
+        return (BusinessException) ex;
     }
 
     // ==================== confirmPayment ====================
 
     @Test
-    void shouldConfirmPayment_WithNonExistentTicket_ThrowResourceNotFound() {
+    void shouldConfirmPayment_WithQrAndReference_PersistPaymentAndMarkTicketPaid() {
         // Given
-        PaymentConfirmRequest request = new PaymentConfirmRequest(
-                99L, Ticket.PaymentMethod.CARD, null, null, null
-        );
-        when(ticketRepository.findById(99L)).thenReturn(Optional.empty());
+        givenConfirmer(clerk);
+        givenPaymentSaved();
+        PaymentConfirmRequest request = new PaymentConfirmRequest(10L, Ticket.PaymentMethod.QR, "  NEQUI-123 ",
+                new BigDecimal("50000"), "https://comprobantes/123.png");
+
+        // When
+        PaymentResponse result = paymentService.confirmPayment(request, 1L);
+
+        // Then: el pago queda registrado con quien lo recibió y el ticket pasa a PAID
+        ArgumentCaptor<Payment> captor = ArgumentCaptor.forClass(Payment.class);
+        verify(paymentRepository).save(captor.capture());
+        Payment saved = captor.getValue();
+        assertThat(saved.getTicket()).isSameAs(ticket);
+        assertThat(saved.getMethod()).isEqualTo(Ticket.PaymentMethod.QR);
+        assertThat(saved.getAmount()).isEqualByComparingTo("50000");
+        assertThat(saved.getTransactionReference()).isEqualTo("NEQUI-123");
+        assertThat(saved.getProofImageUrl()).isEqualTo("https://comprobantes/123.png");
+        assertThat(saved.getConfirmedBy()).isSameAs(clerk);
+        assertThat(saved.getPaidAt()).isNotNull();
+
+        assertThat(ticket.getPaymentStatus()).isEqualTo(Ticket.PaymentStatus.PAID);
+        assertThat(ticket.getPaidAt()).isEqualTo(saved.getPaidAt());
+        verify(ticketRepository).save(ticket);
+
+        // El comprobante identifica ticket, método, monto, referencia y cajero
+        assertThat(result.receiptNumber()).isEqualTo("RCP-7");
+        assertThat(result.ticketId()).isEqualTo(10L);
+        assertThat(result.qrCode()).isEqualTo("QR-10");
+        assertThat(result.paymentMethod()).isEqualTo(Ticket.PaymentMethod.QR);
+        assertThat(result.paymentStatus()).isEqualTo(Ticket.PaymentStatus.PAID);
+        assertThat(result.transactionReference()).isEqualTo("NEQUI-123");
+        assertThat(result.confirmedBy()).isEqualTo("Clerk");
+    }
+
+    @Test
+    void shouldConfirmPayment_WithCashAtCounter_ChangeMethodAndNotRequireReference() {
+        // Given: el pasajero eligió QR pero paga en efectivo en taquilla (contraentrega)
+        givenConfirmer(clerk);
+        givenPaymentSaved();
+
+        // When
+        PaymentResponse result = paymentService.confirmPayment(confirm(Ticket.PaymentMethod.CASH, null, null), 1L);
+
+        // Then
+        assertThat(ticket.getPaymentMethod()).isEqualTo(Ticket.PaymentMethod.CASH);
+        assertThat(result.transactionReference()).isNull();
+        assertThat(result.amount()).isEqualByComparingTo("50000");
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = Ticket.PaymentMethod.class, names = {"QR", "TRANSFER", "CARD"})
+    void shouldConfirmPayment_WithoutReferenceForElectronicMethod_ThrowBadRequest(Ticket.PaymentMethod method) {
+        // Given
+        givenConfirmer(clerk);
+
+        // When/Then: sin referencia (o en blanco) no hay forma de verificar el pago
+        assertThatThrownBy(() -> paymentService.confirmPayment(confirm(method, "   ", null), 1L))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    assertThat(business(ex).getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+                    assertThat(business(ex).getCode()).isEqualTo("TRANSACTION_REFERENCE_REQUIRED");
+                });
+        assertThat(ticket.getPaymentStatus()).isEqualTo(Ticket.PaymentStatus.PENDING);
+        verify(paymentRepository, never()).save(any());
+        verify(ticketRepository, never()).save(any());
+    }
+
+    @Test
+    void shouldConfirmPayment_WithTicketAlreadyPaid_ThrowConflictAndKeepPaymentMethod() {
+        // Given: ticket vendido en taquilla en efectivo (ya PAID); se intenta "confirmarlo" como tarjeta
+        ticket.setPaymentStatus(Ticket.PaymentStatus.PAID);
+        ticket.setPaymentMethod(Ticket.PaymentMethod.CASH);
+        givenConfirmer(clerk);
 
         // When/Then
-        assertThatThrownBy(() -> paymentService.confirmPayment(request))
-                .isInstanceOf(ResourceNotFoundException.class)
-                .hasMessageContaining("Ticket");
+        assertThatThrownBy(() -> paymentService.confirmPayment(confirm(Ticket.PaymentMethod.CARD, "TX-1", null), 1L))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    assertThat(business(ex).getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                    assertThat(business(ex).getCode()).isEqualTo("PAYMENT_ALREADY_CONFIRMED");
+                });
+        assertThat(ticket.getPaymentMethod()).isEqualTo(Ticket.PaymentMethod.CASH);
+        verify(paymentRepository, never()).save(any());
         verify(ticketRepository, never()).save(any());
-        verifyNoInteractions(ticketMapper);
+    }
+
+    @Test
+    void shouldConfirmPayment_WithAmountDifferentFromPrice_ThrowAmountMismatch() {
+        // Given
+        givenConfirmer(clerk);
+
+        // When/Then
+        assertThatThrownBy(() -> paymentService.confirmPayment(
+                confirm(Ticket.PaymentMethod.TRANSFER, "TX-2", new BigDecimal("45000")), 1L))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    assertThat(business(ex).getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+                    assertThat(business(ex).getCode()).isEqualTo("AMOUNT_MISMATCH");
+                });
+        verify(paymentRepository, never()).save(any());
+    }
+
+    @Test
+    void shouldConfirmPayment_WithDriverNotAssignedToTrip_ThrowForbidden() {
+        // Given: el viaje lo conduce otro conductor
+        givenConfirmer(driver);
+        User otherDriver = User.builder().id(99L).role(User.Role.DRIVER).build();
+        when(assignmentRepository.findByTripId(1L))
+                .thenReturn(Optional.of(Assignment.builder().trip(trip).driver(otherDriver).build()));
+
+        // When/Then
+        assertThatThrownBy(() -> paymentService.confirmPayment(confirm(Ticket.PaymentMethod.CASH, null, null), 2L))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    assertThat(business(ex).getStatus()).isEqualTo(HttpStatus.FORBIDDEN);
+                    assertThat(business(ex).getCode()).isEqualTo("DRIVER_NOT_ASSIGNED");
+                });
+        verify(paymentRepository, never()).save(any());
+    }
+
+    @Test
+    void shouldConfirmPayment_WithTripWithoutAssignment_ThrowForbiddenForDriver() {
+        // Given
+        givenConfirmer(driver);
+        when(assignmentRepository.findByTripId(1L)).thenReturn(Optional.empty());
+
+        // When/Then
+        assertThatThrownBy(() -> paymentService.confirmPayment(confirm(Ticket.PaymentMethod.CASH, null, null), 2L))
+                .isInstanceOf(BusinessException.class)
+                .extracting("code").isEqualTo("DRIVER_NOT_ASSIGNED");
+    }
+
+    @Test
+    void shouldConfirmPayment_WithAssignedDriver_CollectOnBoarding() {
+        // Given: contraentrega al subir, cobrada por el conductor del viaje
+        givenConfirmer(driver);
+        givenPaymentSaved();
+        when(assignmentRepository.findByTripId(1L))
+                .thenReturn(Optional.of(Assignment.builder().trip(trip).driver(driver).build()));
+
+        // When
+        PaymentResponse result = paymentService.confirmPayment(confirm(Ticket.PaymentMethod.CASH, null, null), 2L);
+
+        // Then
+        assertThat(result.confirmedBy()).isEqualTo("Driver");
+        assertThat(ticket.getPaymentStatus()).isEqualTo(Ticket.PaymentStatus.PAID);
     }
 
     @ParameterizedTest
@@ -170,239 +272,362 @@ class PaymentServiceImplTest {
     void shouldConfirmPayment_WithTicketNotSold_ThrowConflictInvalidTicketStatus(Ticket.TicketStatus status) {
         // Given
         ticket.setStatus(status);
-        PaymentConfirmRequest request = new PaymentConfirmRequest(
-                1L, Ticket.PaymentMethod.TRANSFER, "REF-1", BigDecimal.valueOf(50000), null
-        );
-        when(ticketRepository.findById(1L)).thenReturn(Optional.of(ticket));
+        givenConfirmer(clerk);
 
         // When/Then
-        assertThatThrownBy(() -> paymentService.confirmPayment(request))
+        assertThatThrownBy(() -> paymentService.confirmPayment(confirm(Ticket.PaymentMethod.TRANSFER, "REF-1", null), 1L))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(ex -> {
-                    BusinessException be = (BusinessException) ex;
-                    assertThat(be.getStatus()).isEqualTo(HttpStatus.CONFLICT);
-                    assertThat(be.getCode()).isEqualTo("INVALID_TICKET_STATUS");
+                    assertThat(business(ex).getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                    assertThat(business(ex).getCode()).isEqualTo("INVALID_TICKET_STATUS");
                 });
-        assertThat(ticket.getPaymentMethod()).isEqualTo(Ticket.PaymentMethod.CASH);
-        verify(ticketRepository, never()).save(any());
-        verifyNoInteractions(ticketMapper);
+        verify(paymentRepository, never()).save(any());
     }
 
-    @ParameterizedTest
-    @EnumSource(Ticket.PaymentMethod.class)
-    void shouldConfirmPayment_WithAnyPaymentMethod_UpdateTicketPaymentMethod(Ticket.PaymentMethod method) {
+    @Test
+    void shouldConfirmPayment_WithNonExistentTicket_ThrowResourceNotFound() {
         // Given
-        PaymentConfirmRequest request = new PaymentConfirmRequest(1L, method, null, null, null);
-        when(ticketRepository.findById(1L)).thenReturn(Optional.of(ticket));
-        when(ticketRepository.save(any(Ticket.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(ticketMapper.toResponse(ticket)).thenReturn(ticketResponse);
+        when(userRepository.findById(1L)).thenReturn(Optional.of(clerk));
+        when(ticketRepository.findById(10L)).thenReturn(Optional.empty());
+
+        // When/Then
+        assertThatThrownBy(() -> paymentService.confirmPayment(confirm(Ticket.PaymentMethod.CASH, null, null), 1L))
+                .isInstanceOf(ResourceNotFoundException.class)
+                .hasMessageContaining("Ticket");
+        verifyNoInteractions(paymentRepository);
+    }
+
+    @Test
+    void shouldConfirmPayment_WhenCashierAlreadyClosedToday_ThrowInvalidStateTransition() {
+        // Given: el cajero ya cerró la caja de hoy, el pago no tendría cierre donde contarse
+        givenConfirmer(clerk);
+        when(cashCloseRepository.existsByUserIdAndCloseDate(1L, LocalDate.now())).thenReturn(true);
+
+        // When/Then
+        assertThatThrownBy(() -> paymentService.confirmPayment(confirm(Ticket.PaymentMethod.CASH, null, null), 1L))
+                .isInstanceOf(InvalidStateTransitionException.class)
+                .satisfies(ex -> assertThat(business(ex).getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY));
+        assertThat(ticket.getPaymentStatus()).isEqualTo(Ticket.PaymentStatus.PENDING);
+        verify(paymentRepository, never()).save(any());
+    }
+
+    // ==================== recordCounterPayment ====================
+
+    @Test
+    void shouldRecordCounterPayment_WithPaidTicket_SaveReceiptForSeller() {
+        // Given: venta en taquilla cobrada en el acto
+        LocalDateTime paidAt = LocalDateTime.of(2026, 3, 15, 9, 30);
+        ticket.setPaymentStatus(Ticket.PaymentStatus.PAID);
+        ticket.setPaymentMethod(Ticket.PaymentMethod.CASH);
+        ticket.setPaidAt(paidAt);
+        when(paymentRepository.save(any(Payment.class))).thenAnswer(inv -> inv.getArgument(0));
 
         // When
-        TicketResponse result = paymentService.confirmPayment(request);
+        Payment payment = paymentService.recordCounterPayment(ticket, clerk);
 
         // Then
-        assertThat(result).isEqualTo(ticketResponse);
-        assertThat(ticket.getPaymentMethod()).isEqualTo(method);
-        assertThat(ticket.getStatus()).isEqualTo(Ticket.TicketStatus.SOLD);
+        assertThat(payment.getTicket()).isSameAs(ticket);
+        assertThat(payment.getMethod()).isEqualTo(Ticket.PaymentMethod.CASH);
+        assertThat(payment.getAmount()).isEqualByComparingTo("50000");
+        assertThat(payment.getPaidAt()).isEqualTo(paidAt);
+        assertThat(payment.getConfirmedBy()).isSameAs(clerk);
+        assertThat(payment.getTransactionReference()).isNull();
+    }
+
+    // ==================== getReceipt ====================
+
+    private Payment paymentOf(Ticket t, Ticket.PaymentMethod method, String amount, User confirmedBy) {
+        return Payment.builder()
+                .id(t.getId() + 100)
+                .ticket(t)
+                .method(method)
+                .amount(new BigDecimal(amount))
+                .paidAt(LocalDateTime.now())
+                .confirmedBy(confirmedBy)
+                .build();
+    }
+
+    @Test
+    void shouldGetReceipt_WithOwnerPassenger_ReturnPaymentResponse() {
+        // Given
+        ticket.setPaymentStatus(Ticket.PaymentStatus.PAID);
+        when(ticketRepository.findById(10L)).thenReturn(Optional.of(ticket));
+        when(userRepository.findById(3L)).thenReturn(Optional.of(passenger));
+        when(paymentRepository.findByTicketId(10L))
+                .thenReturn(Optional.of(paymentOf(ticket, Ticket.PaymentMethod.QR, "50000", clerk)));
+
+        // When
+        PaymentResponse result = paymentService.getReceipt(10L, 3L);
+
+        // Then
+        assertThat(result.receiptNumber()).isEqualTo("RCP-110");
+        assertThat(result.confirmedBy()).isEqualTo("Clerk");
+    }
+
+    @Test
+    void shouldGetReceipt_WithAnotherPassenger_ThrowForbidden() {
+        // Given
+        User other = User.builder().id(4L).role(User.Role.PASSENGER).build();
+        when(ticketRepository.findById(10L)).thenReturn(Optional.of(ticket));
+        when(userRepository.findById(4L)).thenReturn(Optional.of(other));
+
+        // When/Then
+        assertThatThrownBy(() -> paymentService.getReceipt(10L, 4L))
+                .isInstanceOf(BusinessException.class)
+                .extracting("code").isEqualTo("NOT_TICKET_OWNER");
+        verifyNoInteractions(paymentRepository);
+    }
+
+    @Test
+    void shouldGetReceipt_WithPendingTicket_ThrowNotFound() {
+        // Given: la taquilla consulta un ticket que aún no se ha pagado
+        when(ticketRepository.findById(10L)).thenReturn(Optional.of(ticket));
+        when(userRepository.findById(1L)).thenReturn(Optional.of(clerk));
+
+        // When/Then
+        assertThatThrownBy(() -> paymentService.getReceipt(10L, 1L))
+                .isInstanceOf(ResourceNotFoundException.class)
+                .hasMessageContaining("pendiente");
+        verifyNoInteractions(paymentRepository);
     }
 
     // ==================== closeCash ====================
 
-    @Test
-    void shouldCloseCash_WithoutCashTickets_ReturnZeroExpectedAndFullDifference() {
-        // Given
-        LocalDate date = LocalDate.of(2026, 3, 15);
-        CashCloseRequest request = new CashCloseRequest(
-                1L, date, null, BigDecimal.valueOf(20000), null
-        );
-        when(userRepository.findById(1L)).thenReturn(Optional.of(user));
-        when(ticketRepository.findCashTicketsPurchasedBetween(
-                date.atStartOfDay(), date.plusDays(1).atStartOfDay()))
-                .thenReturn(List.of());
-
-        // When
-        CashCloseResponse result = paymentService.closeCash(request, 1L);
-
-        // Then
-        assertThat(result.ticketCount()).isZero();
-        assertThat(result.expectedAmount()).isEqualByComparingTo(BigDecimal.ZERO);
-        assertThat(result.actualAmount()).isEqualByComparingTo("20000");
-        assertThat(result.difference()).isEqualByComparingTo("20000");
+    private void givenNothingClosed(Long userId, LocalDate date) {
+        when(userRepository.findById(userId)).thenReturn(Optional.of(userId.equals(1L) ? clerk : driver));
+        when(cashCloseRepository.existsByUserIdAndCloseDate(userId, date)).thenReturn(false);
+        when(cashCloseRepository.save(any(CashClose.class))).thenAnswer(inv -> {
+            CashClose close = inv.getArgument(0);
+            close.setId(55L);
+            return close;
+        });
     }
 
-    @Test
-    void shouldCloseCash_WithCashShortage_ReturnNegativeDifference() {
-        // Given: esperado 50000 + 30000.50 = 80000.50, reportado 70000 => faltante de 10000.50
-        LocalDate date = LocalDate.of(2026, 3, 15);
-        Ticket second = Ticket.builder()
-                .id(2L)
-                .trip(trip)
-                .price(new BigDecimal("30000.50"))
-                .status(Ticket.TicketStatus.SOLD)
-                .paymentMethod(Ticket.PaymentMethod.CASH)
-                .soldBy(User.builder().id(1L).build())
-                .build();
-        CashCloseRequest request = new CashCloseRequest(
-                1L, date, null, BigDecimal.valueOf(70000), "Cierre turno tarde"
-        );
-        when(userRepository.findById(1L)).thenReturn(Optional.of(user));
-        when(ticketRepository.findCashTicketsPurchasedBetween(
-                date.atStartOfDay(), date.plusDays(1).atStartOfDay()))
-                .thenReturn(List.of(ticket, second));
-
-        // When
-        CashCloseResponse result = paymentService.closeCash(request, 1L);
-
-        // Then
-        assertThat(result.ticketCount()).isEqualTo(2);
-        assertThat(result.expectedAmount()).isEqualByComparingTo("80000.50");
-        assertThat(result.difference()).isEqualByComparingTo("-10000.50");
-        assertThat(result.difference().signum()).isNegative();
+    private void givenPayments(LocalDate date, List<Payment> received, List<Payment> refunded) {
+        when(paymentRepository.findReceivedByUserBetween(1L, date.atStartOfDay(), date.plusDays(1).atStartOfDay()))
+                .thenReturn(received);
+        when(paymentRepository.findCashRefundedByUserBetween(1L, date.atStartOfDay(), date.plusDays(1).atStartOfDay()))
+                .thenReturn(refunded);
     }
 
-    @Test
-    void shouldCloseCash_WithReportedExpectedAmount_IgnoreItAndUseTicketsOfTheDay() {
-        // Given: el esperado enviado por el cliente (999999) no se usa
-        LocalDate date = LocalDate.of(2026, 3, 15);
-        CashCloseRequest request = new CashCloseRequest(
-                1L, date, BigDecimal.valueOf(999999), BigDecimal.valueOf(50000), null
-        );
-        when(userRepository.findById(1L)).thenReturn(Optional.of(user));
-        when(ticketRepository.findCashTicketsPurchasedBetween(
-                date.atStartOfDay(), date.plusDays(1).atStartOfDay()))
-                .thenReturn(List.of(ticket));
-
-        // When
-        CashCloseResponse result = paymentService.closeCash(request, 1L);
-
-        // Then: el cuadre es exacto y la respuesta refleja usuario, fecha y cierre
-        assertThat(result.expectedAmount()).isEqualByComparingTo("50000");
-        assertThat(result.difference()).isEqualByComparingTo(BigDecimal.ZERO);
-        assertThat(result.id()).isEqualTo(1L);
-        assertThat(result.userName()).isEqualTo("Clerk");
-        assertThat(result.date()).isEqualTo(date);
-        assertThat(result.closedAt()).isNotNull();
-        verify(ticketRepository).findCashTicketsPurchasedBetween(
-                LocalDateTime.of(2026, 3, 15, 0, 0), LocalDateTime.of(2026, 3, 16, 0, 0));
-    }
-
-    // ---------- Cierre de caja: equipaje y reembolsos ----------
-
-    private Ticket cashTicket(long id, String price, Ticket.TicketStatus status) {
+    private Ticket paidTicket(long id, String price, Ticket.PaymentMethod method) {
         return Ticket.builder()
                 .id(id)
                 .trip(trip)
                 .price(new BigDecimal(price))
-                .status(status)
-                .paymentMethod(Ticket.PaymentMethod.CASH)
-                .soldBy(User.builder().id(1L).build())
+                .status(Ticket.TicketStatus.SOLD)
+                .paymentMethod(method)
+                .paymentStatus(Ticket.PaymentStatus.PAID)
                 .build();
     }
 
-    @Test
-    void shouldCloseCash_WithBaggageExcessFees_AddThemToExpectedCash() {
-        // Given: equipaje con exceso, equipaje sin exceso (null) y ticket sin equipaje
-        LocalDate date = LocalDate.of(2026, 3, 15);
-        Ticket withExcess = cashTicket(1L, "50000", Ticket.TicketStatus.SOLD);
-        withExcess.setBaggage(Baggage.builder().excessFee(new BigDecimal("15000.50")).build());
-        Ticket withNullExcess = cashTicket(2L, "30000", Ticket.TicketStatus.SOLD);
-        withNullExcess.setBaggage(Baggage.builder().excessFee(null).build());
-        Ticket withoutBaggage = cashTicket(3L, "20000", Ticket.TicketStatus.SOLD);
-        CashCloseRequest request = new CashCloseRequest(1L, date, null, new BigDecimal("115000.50"), null);
+    private Payment received(long id, String price, Ticket.PaymentMethod method) {
+        return paymentOf(paidTicket(id, price, method), method, price, clerk);
+    }
 
-        when(userRepository.findById(1L)).thenReturn(Optional.of(user));
-        when(ticketRepository.findCashTicketsPurchasedBetween(date.atStartOfDay(), date.plusDays(1).atStartOfDay()))
-                .thenReturn(List.of(withExcess, withNullExcess, withoutBaggage));
-        when(ticketRepository.findCashTicketsCancelledBetween(date.atStartOfDay(), date.plusDays(1).atStartOfDay()))
-                .thenReturn(List.of());
+    @Test
+    void shouldCloseCash_WithPaymentsOfAllMethods_ReturnTotalsByMethodAndExpectedCashOnlyFromCash() {
+        // Given
+        givenNothingClosed(1L, DAY);
+        givenPayments(DAY, List.of(
+                received(1L, "50000", Ticket.PaymentMethod.CASH),
+                received(2L, "30000", Ticket.PaymentMethod.QR),
+                received(3L, "20000", Ticket.PaymentMethod.TRANSFER),
+                received(4L, "10000", Ticket.PaymentMethod.CARD),
+                received(5L, "15000.50", Ticket.PaymentMethod.CASH)), List.of());
+        CashCloseRequest request = new CashCloseRequest(DAY, null, new BigDecimal("60000"), "Turno mañana");
 
         // When
         CashCloseResponse result = paymentService.closeCash(request, 1L);
 
-        // Then: 50000 + 15000.50 + 30000 + 20000
-        assertThat(result.expectedAmount()).isEqualByComparingTo("115000.50");
+        // Then: los pagos electrónicos no están en la caja física
+        assertThat(result.totalsByMethod()).containsOnlyKeys("CASH", "TRANSFER", "QR", "CARD");
+        assertThat(result.totalsByMethod().get("CASH")).isEqualByComparingTo("65000.50");
+        assertThat(result.totalsByMethod().get("QR")).isEqualByComparingTo("30000");
+        assertThat(result.totalsByMethod().get("TRANSFER")).isEqualByComparingTo("20000");
+        assertThat(result.totalsByMethod().get("CARD")).isEqualByComparingTo("10000");
+        assertThat(result.expectedAmount()).isEqualByComparingTo("65000.50");
+        assertThat(result.difference()).isEqualByComparingTo("-5000.50");
+        assertThat(result.ticketCount()).isEqualTo(5);
+        assertThat(result.id()).isEqualTo(55L);
+        assertThat(result.userId()).isEqualTo(1L);
+        assertThat(result.userName()).isEqualTo("Clerk");
+        assertThat(result.notes()).isEqualTo("Turno mañana");
+    }
+
+    @Test
+    void shouldCloseCash_WithValidRequest_PersistCashClose() {
+        // Given
+        givenNothingClosed(1L, DAY);
+        givenPayments(DAY, List.of(received(1L, "50000", Ticket.PaymentMethod.CASH)), List.of());
+
+        // When
+        paymentService.closeCash(new CashCloseRequest(DAY, new BigDecimal("999999"), new BigDecimal("50000"), "Sin novedad"), 1L);
+
+        // Then: el esperado enviado por el cliente se ignora
+        ArgumentCaptor<CashClose> captor = ArgumentCaptor.forClass(CashClose.class);
+        verify(cashCloseRepository).save(captor.capture());
+        CashClose saved = captor.getValue();
+        assertThat(saved.getUser()).isSameAs(clerk);
+        assertThat(saved.getCloseDate()).isEqualTo(DAY);
+        assertThat(saved.getExpectedAmount()).isEqualByComparingTo("50000");
+        assertThat(saved.getActualAmount()).isEqualByComparingTo("50000");
+        assertThat(saved.getDifference()).isEqualByComparingTo("0");
+        assertThat(saved.getTicketsCount()).isEqualTo(1);
+        assertThat(saved.getNotes()).isEqualTo("Sin novedad");
+        assertThat(saved.getClosedAt()).isNotNull();
+    }
+
+    @Test
+    void shouldCloseCash_WhenAlreadyClosedThatDay_ThrowConflict() {
+        // Given
+        when(userRepository.findById(1L)).thenReturn(Optional.of(clerk));
+        when(cashCloseRepository.existsByUserIdAndCloseDate(1L, DAY)).thenReturn(true);
+
+        // When/Then
+        assertThatThrownBy(() -> paymentService.closeCash(new CashCloseRequest(DAY, null, BigDecimal.ZERO, null), 1L))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    assertThat(business(ex).getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                    assertThat(business(ex).getCode()).isEqualTo("CASH_ALREADY_CLOSED");
+                });
+        verify(cashCloseRepository, never()).save(any());
+        verifyNoInteractions(paymentRepository);
+    }
+
+    @Test
+    void shouldCloseCash_WithBaggageAndRefunds_AddExcessFeesAndSubtractCashRefunds() {
+        // Given: venta en efectivo con exceso de equipaje, otra vendida y cancelada hoy, y un
+        // reembolso de una venta de otro día; el exceso de un pago QR no entra en el efectivo
+        Payment withBaggage = received(1L, "50000", Ticket.PaymentMethod.CASH);
+        withBaggage.getTicket().setBaggage(Baggage.builder().excessFee(new BigDecimal("15000.50")).build());
+        Payment qrWithBaggage = received(2L, "30000", Ticket.PaymentMethod.QR);
+        qrWithBaggage.getTicket().setBaggage(Baggage.builder().excessFee(new BigDecimal("8000")).build());
+        Payment soldAndCancelled = received(3L, "40000", Ticket.PaymentMethod.CASH);
+        soldAndCancelled.getTicket().setStatus(Ticket.TicketStatus.CANCELLED);
+        soldAndCancelled.getTicket().setRefundAmount(new BigDecimal("36000"));
+        Payment cancelledFromAnotherDay = received(4L, "60000", Ticket.PaymentMethod.CASH);
+        cancelledFromAnotherDay.getTicket().setStatus(Ticket.TicketStatus.CANCELLED);
+        cancelledFromAnotherDay.getTicket().setRefundAmount(new BigDecimal("30000"));
+        Payment cancelledWithoutRefund = received(5L, "10000", Ticket.PaymentMethod.CASH);
+        cancelledWithoutRefund.getTicket().setStatus(Ticket.TicketStatus.CANCELLED);
+
+        givenNothingClosed(1L, DAY);
+        givenPayments(DAY, List.of(withBaggage, qrWithBaggage, soldAndCancelled),
+                List.of(soldAndCancelled, cancelledFromAnotherDay, cancelledWithoutRefund));
+
+        // When
+        CashCloseResponse result = paymentService.closeCash(new CashCloseRequest(DAY, null, new BigDecimal("39000.50"), null), 1L);
+
+        // Then: (50000 + 40000) + 15000.50 - (36000 + 30000 + 0) = 39000.50
+        assertThat(result.baggageTotal()).isEqualByComparingTo("15000.50");
+        assertThat(result.refundsTotal()).isEqualByComparingTo("66000");
+        assertThat(result.expectedAmount()).isEqualByComparingTo("39000.50");
         assertThat(result.difference()).isEqualByComparingTo("0");
         assertThat(result.ticketCount()).isEqualTo(3);
     }
 
     @Test
-    void shouldCloseCash_WithCancelledTicketsOfTheDay_SubtractRefunds() {
-        // Given: el ticket vendido y cancelado el mismo día cuenta su venta y resta su reembolso;
-        // otro cancelado hoy (vendido otro día) solo resta su reembolso; uno sin reembolso resta 0
-        LocalDate date = LocalDate.of(2026, 3, 15);
-        Ticket soldToday = cashTicket(1L, "50000", Ticket.TicketStatus.SOLD);
-        Ticket soldAndCancelledToday = cashTicket(2L, "40000", Ticket.TicketStatus.CANCELLED);
-        soldAndCancelledToday.setRefundAmount(new BigDecimal("36000"));
-        Ticket cancelledFromAnotherDay = cashTicket(3L, "60000", Ticket.TicketStatus.CANCELLED);
-        cancelledFromAnotherDay.setRefundAmount(new BigDecimal("30000"));
-        Ticket cancelledWithoutRefund = cashTicket(4L, "10000", Ticket.TicketStatus.CANCELLED);
-        cancelledWithoutRefund.setRefundAmount(null);
-        CashCloseRequest request = new CashCloseRequest(1L, date, null, new BigDecimal("20000"), null);
-
-        when(userRepository.findById(1L)).thenReturn(Optional.of(user));
-        when(ticketRepository.findCashTicketsPurchasedBetween(date.atStartOfDay(), date.plusDays(1).atStartOfDay()))
-                .thenReturn(List.of(soldToday, soldAndCancelledToday));
-        when(ticketRepository.findCashTicketsCancelledBetween(date.atStartOfDay(), date.plusDays(1).atStartOfDay()))
-                .thenReturn(List.of(soldAndCancelledToday, cancelledFromAnotherDay, cancelledWithoutRefund));
+    void shouldCloseCash_CountingOnlyPaidTickets_IgnorePendingAppPurchases() {
+        // Given: el cierre se calcula con los pagos registrados (solo existen para tickets PAID);
+        // las compras PENDING por la app no tienen pago y no se consultan en tickets
+        givenNothingClosed(1L, DAY);
+        givenPayments(DAY, List.of(received(1L, "50000", Ticket.PaymentMethod.CASH)), List.of());
 
         // When
-        CashCloseResponse result = paymentService.closeCash(request, 1L);
-
-        // Then: (50000 + 40000) - (36000 + 30000 + 0) = 24000
-        assertThat(result.expectedAmount()).isEqualByComparingTo("24000");
-        assertThat(result.difference()).isEqualByComparingTo("-4000");
-        assertThat(result.ticketCount()).isEqualTo(2);
-    }
-
-    @Test
-    void shouldCloseCash_WithOnlyRefunds_ReturnNegativeExpectedCash() {
-        // Given: día sin ventas en efectivo pero con reembolsos
-        LocalDate date = LocalDate.of(2026, 3, 15);
-        Ticket cancelled = cashTicket(1L, "60000", Ticket.TicketStatus.CANCELLED);
-        cancelled.setRefundAmount(new BigDecimal("42000"));
-        CashCloseRequest request = new CashCloseRequest(1L, date, null, new BigDecimal("-42000"), null);
-
-        when(userRepository.findById(1L)).thenReturn(Optional.of(user));
-        when(ticketRepository.findCashTicketsPurchasedBetween(date.atStartOfDay(), date.plusDays(1).atStartOfDay()))
-                .thenReturn(List.of());
-        when(ticketRepository.findCashTicketsCancelledBetween(date.atStartOfDay(), date.plusDays(1).atStartOfDay()))
-                .thenReturn(List.of(cancelled));
-
-        // When
-        CashCloseResponse result = paymentService.closeCash(request, 1L);
-
-        // Then
-        assertThat(result.expectedAmount()).isEqualByComparingTo("-42000");
-        assertThat(result.difference()).isEqualByComparingTo("0");
-        assertThat(result.ticketCount()).isZero();
-    }
-
-    @Test
-    void shouldCloseCash_WithTicketsOfOtherCashiers_CountOnlyOwnSales() {
-        // Given: la caja es por cajero; las ventas y reembolsos de otro usuario no cuentan
-        LocalDate date = LocalDate.of(2026, 3, 15);
-        Ticket own = cashTicket(1L, "50000", Ticket.TicketStatus.SOLD);
-        Ticket other = cashTicket(2L, "70000", Ticket.TicketStatus.SOLD);
-        other.setSoldBy(User.builder().id(2L).build());
-        Ticket appSale = cashTicket(3L, "30000", Ticket.TicketStatus.SOLD);
-        appSale.setSoldBy(null);
-        Ticket otherCancelled = cashTicket(4L, "40000", Ticket.TicketStatus.CANCELLED);
-        otherCancelled.setSoldBy(User.builder().id(2L).build());
-        otherCancelled.setRefundAmount(new BigDecimal("20000"));
-        CashCloseRequest request = new CashCloseRequest(1L, date, null, BigDecimal.valueOf(50000), null);
-        when(userRepository.findById(1L)).thenReturn(Optional.of(user));
-        when(ticketRepository.findCashTicketsPurchasedBetween(date.atStartOfDay(), date.plusDays(1).atStartOfDay()))
-                .thenReturn(List.of(own, other, appSale));
-        when(ticketRepository.findCashTicketsCancelledBetween(date.atStartOfDay(), date.plusDays(1).atStartOfDay()))
-                .thenReturn(List.of(otherCancelled));
-
-        // When
-        CashCloseResponse result = paymentService.closeCash(request, 1L);
+        CashCloseResponse result = paymentService.closeCash(new CashCloseRequest(DAY, null, new BigDecimal("50000"), null), 1L);
 
         // Then
         assertThat(result.expectedAmount()).isEqualByComparingTo("50000");
         assertThat(result.ticketCount()).isEqualTo(1);
-        assertThat(result.difference()).isEqualByComparingTo("0");
+        verifyNoInteractions(ticketRepository);
+    }
+
+    @Test
+    void shouldCloseCash_WithOfflineSaleOfYesterdaySyncedToday_CountItInTodaysClose() {
+        // Criterio: una venta cuenta en la caja del día en que se cobra en el sistema (paidAt); una venta
+        // offline se cobra al sincronizarse, así que la de ayer sincronizada hoy entra en el cierre de hoy
+        LocalDate today = LocalDate.now();
+        Payment offlineSale = received(1L, "50000", Ticket.PaymentMethod.CASH);
+        offlineSale.getTicket().setPurchasedAt(today.minusDays(1).atTime(18, 0));
+        offlineSale.getTicket().setSyncedAt(today.atTime(7, 0));
+        offlineSale.setPaidAt(today.atTime(7, 0));
+        givenNothingClosed(1L, today);
+        givenPayments(today, List.of(offlineSale), List.of());
+
+        // When
+        CashCloseResponse result = paymentService.closeCash(new CashCloseRequest(today, null, new BigDecimal("50000"), null), 1L);
+
+        // Then: se busca por el rango de pago de hoy, no por la fecha de compra
+        assertThat(result.expectedAmount()).isEqualByComparingTo("50000");
+        assertThat(result.ticketCount()).isEqualTo(1);
+        verify(paymentRepository).findReceivedByUserBetween(1L, today.atStartOfDay(), today.plusDays(1).atStartOfDay());
+    }
+
+    @Test
+    void shouldCloseCash_WithNonExistentUser_ThrowResourceNotFound() {
+        // Given
+        when(userRepository.findById(1L)).thenReturn(Optional.empty());
+
+        // When/Then
+        assertThatThrownBy(() -> paymentService.closeCash(new CashCloseRequest(DAY, null, BigDecimal.ZERO, null), 1L))
+                .isInstanceOf(ResourceNotFoundException.class)
+                .hasMessageContaining("Usuario");
+        verifyNoInteractions(paymentRepository, cashCloseRepository);
+    }
+
+    // ==================== getCashCloses ====================
+
+    private CashClose closeOf(User user, LocalDate date) {
+        return CashClose.builder().id(user.getId() * 10).user(user).closeDate(date)
+                .expectedAmount(BigDecimal.ZERO).actualAmount(BigDecimal.ZERO).difference(BigDecimal.ZERO)
+                .ticketsCount(0).refundsTotal(BigDecimal.ZERO).baggageTotal(BigDecimal.ZERO)
+                .closedAt(date.atTime(20, 0)).build();
+    }
+
+    @Test
+    void shouldGetCashCloses_AsAdminWithDate_ReturnClosesOfAllUsers() {
+        // Given
+        User admin = User.builder().id(9L).role(User.Role.ADMIN).build();
+        when(userRepository.findById(9L)).thenReturn(Optional.of(admin));
+        when(cashCloseRepository.findByCloseDateOrderByClosedAtAsc(DAY))
+                .thenReturn(List.of(closeOf(clerk, DAY), closeOf(driver, DAY)));
+
+        // When
+        List<CashCloseResponse> result = paymentService.getCashCloses(DAY, 9L);
+
+        // Then
+        assertThat(result).extracting(CashCloseResponse::userName).containsExactly("Clerk", "Driver");
+    }
+
+    @Test
+    void shouldGetCashCloses_AsClerk_ReturnOnlyOwnCloses() {
+        // Given
+        when(userRepository.findById(1L)).thenReturn(Optional.of(clerk));
+        when(cashCloseRepository.findByUserIdOrderByCloseDateDesc(1L)).thenReturn(List.of(closeOf(clerk, DAY)));
+
+        // When
+        List<CashCloseResponse> result = paymentService.getCashCloses(null, 1L);
+
+        // Then
+        assertThat(result).singleElement().satisfies(c -> {
+            assertThat(c.userId()).isEqualTo(1L);
+            assertThat(c.date()).isEqualTo(DAY);
+        });
+        verify(cashCloseRepository, never()).findAllByOrderByCloseDateDescClosedAtDesc();
+    }
+
+    @Test
+    void shouldGetCashCloses_AsDriverWithDate_FilterOwnByDate() {
+        // Given
+        when(userRepository.findById(2L)).thenReturn(Optional.of(driver));
+        when(cashCloseRepository.findByUserIdAndCloseDate(2L, DAY)).thenReturn(List.of());
+
+        // When
+        List<CashCloseResponse> result = paymentService.getCashCloses(DAY, 2L);
+
+        // Then
+        assertThat(result).isEmpty();
+        verify(cashCloseRepository, never()).findByCloseDateOrderByClosedAtAsc(any());
     }
 }
-
