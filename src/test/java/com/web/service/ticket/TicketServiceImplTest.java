@@ -71,6 +71,8 @@ class TicketServiceImplTest {
 
     @Mock
     private com.web.service.notification.NotificationService notificationService;
+    @Mock
+    private com.web.service.baggage.BaggageService baggageService;
 
     @InjectMocks
     private TicketServiceImpl ticketService;
@@ -1025,80 +1027,47 @@ class TicketServiceImplTest {
 
     // ==================== purchaseTicket: equipaje ====================
 
+    // El cálculo de peso máximo, cargo por exceso y maletero vive en BaggageService (BaggageServiceImplTest)
     @Test
-    void shouldPurchaseTicket_WithBaggageUnderLimit_RegisterBaggageWithoutExcessFee() {
+    void shouldPurchaseTicket_WithBaggage_DelegateRegistrationToBaggageService() {
         // Given
-        TicketCreateRequest request = buildRequest(10, null,
-                new BaggageCreateRequest(BigDecimal.valueOf(20), null));
+        BaggageCreateRequest baggage = new BaggageCreateRequest(BigDecimal.valueOf(25), null, "B");
+        TicketCreateRequest request = buildRequest(10, null, baggage);
         stubEntitiesFound();
         stubSeatFree(10);
         stubOverbookingCheck(20L, 0.05);
         stubConfigBasePrice(BigDecimal.valueOf(50000));
         stubTicketPersistence(request);
-        when(qrCodeGenerator.generateBaggageTag()).thenReturn("BAG-001");
-        when(configService.getBaggageWeightLimit()).thenReturn(23.0);
-        when(baggageRepository.save(any(Baggage.class))).thenAnswer(inv -> inv.getArgument(0));
 
         // When
         ticketService.purchaseTicket(request);
 
-        // Then
-        ArgumentCaptor<Baggage> captor = ArgumentCaptor.forClass(Baggage.class);
-        verify(baggageRepository).save(captor.capture());
-        Baggage saved = captor.getValue();
-        assertThat(saved.getTicket()).isSameAs(ticket);
-        assertThat(saved.getTagCode()).isEqualTo("BAG-001");
-        assertThat(saved.getWeightKg()).isEqualByComparingTo("20");
-        assertThat(saved.getExcessFee()).isEqualByComparingTo(BigDecimal.ZERO);
-        assertThat(ticket.getBaggage()).isSameAs(saved);
-        verify(configService, never()).getExcessFeePerKg();
+        // Then: se registra sobre el ticket ya guardado, una sola vez
+        verify(baggageService).registerForTicket(ticket, baggage);
+        verifyNoInteractions(baggageRepository);
     }
 
     @Test
-    void shouldPurchaseTicket_WithBaggageExactlyAtLimit_NotChargeExcess() {
-        // Given
-        TicketCreateRequest request = buildRequest(10, null,
-                new BaggageCreateRequest(BigDecimal.valueOf(23), null));
+    void shouldPurchaseTicket_WhenBaggageRejected_PropagateError() {
+        // Given: el equipaje supera el máximo absoluto
+        BaggageCreateRequest baggage = new BaggageCreateRequest(BigDecimal.valueOf(80), null);
+        TicketCreateRequest request = buildRequest(10, null, baggage);
         stubEntitiesFound();
         stubSeatFree(10);
         stubOverbookingCheck(20L, 0.05);
         stubConfigBasePrice(BigDecimal.valueOf(50000));
-        stubTicketPersistence(request);
-        when(qrCodeGenerator.generateBaggageTag()).thenReturn("BAG-002");
-        when(configService.getBaggageWeightLimit()).thenReturn(23.0);
-        when(baggageRepository.save(any(Baggage.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(ticketMapper.toEntity(request)).thenReturn(ticket);
+        when(qrCodeGenerator.generateTicketQr()).thenReturn("QR123");
+        when(ticketRepository.save(any(Ticket.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(baggageService.registerForTicket(ticket, baggage)).thenThrow(new BusinessException(
+                "El peso del equipaje excede el máximo", org.springframework.http.HttpStatus.BAD_REQUEST,
+                "BAGGAGE_WEIGHT_EXCEEDED"));
 
-        // When
-        ticketService.purchaseTicket(request);
-
-        // Then
-        verify(baggageRepository).save(argThat(b -> b.getExcessFee().compareTo(BigDecimal.ZERO) == 0));
-        verify(configService, never()).getExcessFeePerKg();
-    }
-
-    @ParameterizedTest
-    @CsvSource({"30, 35000.00", "25.5, 12500.00", "23.01, 50.00"})
-    void shouldPurchaseTicket_WithBaggageOverLimit_ChargeExcessPerKg(BigDecimal weightKg, BigDecimal expectedFee) {
-        // Given: límite 23 kg y 5000 por kg de exceso
-        TicketCreateRequest request = buildRequest(10, null, new BaggageCreateRequest(weightKg, null));
-        stubEntitiesFound();
-        stubSeatFree(10);
-        stubOverbookingCheck(20L, 0.05);
-        stubConfigBasePrice(BigDecimal.valueOf(50000));
-        stubTicketPersistence(request);
-        when(qrCodeGenerator.generateBaggageTag()).thenReturn("BAG-003");
-        when(configService.getBaggageWeightLimit()).thenReturn(23.0);
-        when(configService.getExcessFeePerKg()).thenReturn(BigDecimal.valueOf(5000));
-        when(baggageRepository.save(any(Baggage.class))).thenAnswer(inv -> inv.getArgument(0));
-
-        // When
-        ticketService.purchaseTicket(request);
-
-        // Then
-        ArgumentCaptor<Baggage> captor = ArgumentCaptor.forClass(Baggage.class);
-        verify(baggageRepository).save(captor.capture());
-        assertThat(captor.getValue().getExcessFee()).isEqualByComparingTo(expectedFee);
-        assertThat(captor.getValue().getExcessFee().scale()).isEqualTo(2);
+        // When/Then: la excepción revierte la compra (transacción) y no se notifica
+        assertThatThrownBy(() -> ticketService.purchaseTicket(request))
+                .isInstanceOf(BusinessException.class)
+                .extracting("code").isEqualTo("BAGGAGE_WEIGHT_EXCEEDED");
+        verifyNoInteractions(notificationService);
     }
 
     // ==================== cancelTicket ====================

@@ -29,15 +29,32 @@ public class IncidentController {
         return ResponseEntity.status(HttpStatus.CREATED).body(incidentService.reportIncident(request));
     }
 
-    // Consulta de incidentes con filtros opcionales (from/to: fechas inclusivas)
+    // Consulta de incidentes con filtros opcionales (from/to: fechas inclusivas).
+    // CLERK y DRIVER solo consultan los suyos con reportedBy=me
     @GetMapping
-    @PreAuthorize("hasAnyRole('ADMIN', 'DISPATCHER')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'DISPATCHER', 'CLERK', 'DRIVER')")
     public ResponseEntity<List<IncidentResponse>> searchIncidents(
             @RequestParam(required = false) Incident.IncidentType type,
             @RequestParam(required = false) Incident.EntityType entityType,
             @RequestParam(required = false) Long entityId,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
-        return ResponseEntity.ok(incidentService.searchIncidents(type, entityType, entityId, from, to));
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @RequestParam(required = false) Incident.IncidentStatus status,
+            @RequestParam(required = false) String reportedBy) {
+        return ResponseEntity.ok(incidentService.searchIncidents(type, entityType, entityId, from, to, status, reportedBy));
+    }
+
+    // Detalle de un incidente (ADMIN, DISPATCHER o quien lo reportó)
+    @GetMapping("/{id}")
+    @PreAuthorize("hasAnyRole('ADMIN', 'DISPATCHER', 'CLERK', 'DRIVER')")
+    public ResponseEntity<IncidentResponse> getIncident(@PathVariable Long id) {
+        return ResponseEntity.ok(incidentService.getIncident(id));
+    }
+
+    // Marca un incidente como resuelto
+    @PatchMapping("/{id}/resolve")
+    @PreAuthorize("hasAnyRole('ADMIN', 'DISPATCHER')")
+    public ResponseEntity<IncidentResponse> resolveIncident(@PathVariable Long id) {
+        return ResponseEntity.ok(incidentService.resolveIncident(id));
     }
 }

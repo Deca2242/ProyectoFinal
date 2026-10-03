@@ -36,6 +36,11 @@ class BaggageSummaryServiceImplTest {
     private BaggageSummaryServiceImpl baggageSummaryService;
 
     private static Baggage baggage(long id, Ticket.TicketStatus status, String weight, String excessFee) {
+        return baggage(id, status, weight, excessFee, "MAIN");
+    }
+
+    private static Baggage baggage(long id, Ticket.TicketStatus status, String weight, String excessFee,
+                                   String compartment) {
         Ticket ticket = Ticket.builder().id(id).status(status).build();
         return Baggage.builder()
                 .id(id)
@@ -43,6 +48,7 @@ class BaggageSummaryServiceImplTest {
                 .weightKg(new BigDecimal(weight))
                 .excessFee(excessFee == null ? null : new BigDecimal(excessFee))
                 .tagCode("TAG-" + id)
+                .compartment(compartment)
                 .build();
     }
 
@@ -100,6 +106,30 @@ class BaggageSummaryServiceImplTest {
         assertThat(response.totalWeightKg()).isEqualByComparingTo("0");
         assertThat(response.totalExcessFee()).isEqualByComparingTo("0");
         assertThat(response.items()).isEmpty();
+        assertThat(response.byCompartment()).isEmpty();
+    }
+
+    @Test
+    void shouldGetTripBaggage_GroupPiecesAndWeightByCompartment() {
+        // Given: dos maleteros; el equipaje del ticket cancelado no cuenta
+        Baggage a1 = baggage(1L, Ticket.TicketStatus.SOLD, "10.00", "0", "A");
+        Baggage a2 = baggage(2L, Ticket.TicketStatus.SOLD, "15.50", "0", "A");
+        Baggage b1 = baggage(3L, Ticket.TicketStatus.SOLD, "30.00", "35000.00", "B");
+        Baggage cancelledInB = baggage(4L, Ticket.TicketStatus.CANCELLED, "40.00", "0", "B");
+        when(tripRepository.existsById(1L)).thenReturn(true);
+        when(baggageRepository.findByTripId(1L)).thenReturn(List.of(a1, b1, cancelledInB, a2));
+        when(baggageMapper.toResponseList(List.of(a1, b1, a2))).thenReturn(List.of());
+
+        // When
+        TripBaggageSummaryResponse response = baggageSummaryService.getTripBaggage(1L);
+
+        // Then
+        assertThat(response.byCompartment()).containsOnlyKeys("A", "B");
+        assertThat(response.byCompartment().get("A").pieces()).isEqualTo(2);
+        assertThat(response.byCompartment().get("A").totalWeightKg()).isEqualByComparingTo("25.50");
+        assertThat(response.byCompartment().get("B").pieces()).isEqualTo(1);
+        assertThat(response.byCompartment().get("B").totalWeightKg()).isEqualByComparingTo("30.00");
+        assertThat(response.totalPieces()).isEqualTo(3);
     }
 
     @Test

@@ -15,6 +15,9 @@ public interface UserRepository extends JpaRepository<User, Long> {
 
     boolean existsByEmail(String email);
 
+    // Usuario con un teléfono dado (notificaciones de encomiendas a remitente/destinatario)
+    Optional<User> findFirstByPhone(String phone);
+
     // Buscar usuarios por rol
     List<User> findByRole(User.Role role);
 

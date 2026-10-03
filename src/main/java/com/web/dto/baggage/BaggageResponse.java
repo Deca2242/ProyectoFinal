@@ -10,6 +10,7 @@ public record BaggageResponse(
     BigDecimal weightKg,
     BigDecimal excessFee,
     String tagCode,
+    String compartment,
     LocalDateTime createdAt
 ) implements Serializable {}
 

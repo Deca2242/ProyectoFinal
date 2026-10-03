@@ -4,21 +4,28 @@ import java.math.BigDecimal;
 import com.web.dto.parcel.ParcelCreateRequest;
 import com.web.dto.parcel.ParcelResponse;
 import com.web.dto.parcel.mapper.ParcelMapper;
+import com.web.entity.Assignment;
 import com.web.entity.Incident;
 import com.web.entity.Parcel;
 import com.web.entity.Route;
 import com.web.entity.Stop;
 import com.web.entity.Trip;
+import com.web.entity.User;
 import com.web.exception.BusinessException;
 import com.web.exception.InvalidSegmentException;
 import com.web.exception.InvalidStateTransitionException;
 import com.web.exception.ResourceNotFoundException;
+import com.web.repository.AssignmentRepository;
 import com.web.repository.IncidentRepository;
 import com.web.repository.ParcelRepository;
 import com.web.repository.StopRepository;
 import com.web.repository.TripRepository;
+import com.web.repository.UserRepository;
+import com.web.service.admin.ConfigService;
+import com.web.service.notification.NotificationService;
 import com.web.util.OtpGenerator;
 import com.web.util.QrCodeGenerator;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -29,7 +36,12 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.SecurityContextHolder;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -45,6 +57,8 @@ import static org.mockito.Mockito.*;
 @ExtendWith(MockitoExtension.class)
 class ParcelServiceImplTest {
 
+    private static final String HASH = "hash-de-123456";
+
     @Mock
     private ParcelRepository parcelRepository;
     @Mock
@@ -54,15 +68,24 @@ class ParcelServiceImplTest {
     @Mock
     private IncidentRepository incidentRepository;
     @Mock
+    private AssignmentRepository assignmentRepository;
+    @Mock
+    private UserRepository userRepository;
+    @Mock
     private ParcelMapper parcelMapper;
     @Mock
     private QrCodeGenerator qrCodeGenerator;
     @Mock
     private OtpGenerator otpGenerator;
+    @Mock
+    private ConfigService configService;
+    @Mock
+    private NotificationService notificationService;
 
     @InjectMocks
     private ParcelServiceImpl parcelService;
 
+    private Route route;
     private Trip trip;
     private Stop fromStop;
     private Stop toStop;
@@ -71,7 +94,7 @@ class ParcelServiceImplTest {
 
     @BeforeEach
     void setUp() {
-        Route route = Route.builder()
+        route = Route.builder()
                 .id(1L)
                 .name("Route Name")
                 .build();
@@ -79,6 +102,7 @@ class ParcelServiceImplTest {
         trip = Trip.builder()
                 .id(1L)
                 .route(route)
+                .status(Trip.TripStatus.BOARDING)
                 .build();
 
         fromStop = Stop.builder()
@@ -101,7 +125,7 @@ class ParcelServiceImplTest {
                 .fromStop(fromStop)
                 .toStop(toStop)
                 .code("PARCEL001")
-                .deliveryOtp("123456")
+                .deliveryOtp(HASH)
                 .status(Parcel.ParcelStatus.IN_TRANSIT)
                 .build();
 
@@ -110,186 +134,66 @@ class ParcelServiceImplTest {
                 "Sender", "123456789", "Receiver", "987654321",
                 1L, "Origin", 2L, "Destination",
                 null, null, Parcel.ParcelStatus.IN_TRANSIT,
-                "123456", null, null, null
+                null, null, null, null, "Description", 0
         );
     }
 
-    @Test
-    void shouldCreateParcel_WithValidRequest_ReturnParcelResponse() {
-        // Given
-        ParcelCreateRequest request = new ParcelCreateRequest(
-                1L, "Sender", "123456789", "Receiver", "987654321",
-                1L, "Origin", 2L, "Destination",
-                BigDecimal.valueOf(10000), BigDecimal.valueOf(10.0), "Description"
-        );
+    @AfterEach
+    void tearDown() {
+        SecurityContextHolder.clearContext();
+    }
 
+    private void authenticate(String username, String role) {
+        SecurityContextHolder.getContext().setAuthentication(new UsernamePasswordAuthenticationToken(
+                username, null, List.of(new SimpleGrantedAuthority("ROLE_" + role))));
+    }
+
+    // ==================== createParcel ====================
+
+    @Test
+    void shouldCreateParcel_WithValidRequest_SaveOtpHashAndReturnPlainOtpOnce() {
+        // Given: el mapper devuelve una entidad sin relaciones ni código
+        ParcelCreateRequest request = buildParcelRequest();
+        Parcel mapped = Parcel.builder()
+                .senderName("Sender")
+                .receiverName("Receiver")
+                .description("Description")
+                .price(BigDecimal.valueOf(10000))
+                .build();
+        ParcelResponse withOtp = new ParcelResponse(1L, "PCL-XYZ", 1L, "Route Name", null,
+                "Sender", "123456789", "Receiver", "987654321", 1L, "Origin", 2L, "Destination",
+                null, null, Parcel.ParcelStatus.CREATED, "987654", null, null, null, "Description", 0);
         when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
         when(stopRepository.findById(1L)).thenReturn(Optional.of(fromStop));
         when(stopRepository.findById(2L)).thenReturn(Optional.of(toStop));
-        when(qrCodeGenerator.generateParcelCode()).thenReturn("PARCEL001");
-        when(otpGenerator.generate6DigitOtp()).thenReturn("123456");
-        when(parcelMapper.toEntity(request)).thenReturn(parcel);
-        when(parcelRepository.save(any(Parcel.class))).thenAnswer(inv -> {
-            Parcel p = inv.getArgument(0);
-            p.setId(1L);
-            return p;
-        });
-        when(parcelMapper.toResponseWithOtp(any(Parcel.class))).thenReturn(parcelResponse);
+        when(qrCodeGenerator.generateParcelCode()).thenReturn("PCL-XYZ");
+        when(otpGenerator.generate6DigitOtp()).thenReturn("987654");
+        when(otpGenerator.hashOtp("PCL-XYZ", "987654")).thenReturn("hash-987654");
+        when(parcelMapper.toEntity(request)).thenReturn(mapped);
+        when(parcelRepository.save(any(Parcel.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(parcelMapper.toResponseWithOtp(mapped, "987654")).thenReturn(withOtp);
 
         // When
         ParcelResponse result = parcelService.createParcel(request);
 
-        // Then
-        assertThat(result).isNotNull();
-        assertThat(result.id()).isEqualTo(1L);
-        verify(tripRepository).findById(1L);
-        verify(parcelRepository).save(any(Parcel.class));
-    }
-
-    @Test
-    void shouldTrackParcel_WithValidCode_ReturnParcelResponse() {
-        // Given
-        when(parcelRepository.findByCode("PARCEL001")).thenReturn(Optional.of(parcel));
-        when(parcelMapper.toPublicResponse(parcel)).thenReturn(parcelResponse);
-
-        // When
-        ParcelResponse result = parcelService.trackParcel("PARCEL001");
-
-        // Then
-        assertThat(result).isNotNull();
-        assertThat(result.code()).isEqualTo("PARCEL001");
-        verify(parcelRepository).findByCode("PARCEL001");
-        // El rastreo público nunca usa el mapeo que incluye el OTP
+        // Then: se guarda el hash, nunca el OTP en claro
+        ArgumentCaptor<Parcel> captor = ArgumentCaptor.forClass(Parcel.class);
+        verify(parcelRepository).save(captor.capture());
+        Parcel saved = captor.getValue();
+        assertThat(saved.getTrip()).isSameAs(trip);
+        assertThat(saved.getFromStop()).isSameAs(fromStop);
+        assertThat(saved.getToStop()).isSameAs(toStop);
+        assertThat(saved.getCode()).isEqualTo("PCL-XYZ");
+        assertThat(saved.getDeliveryOtp()).isEqualTo("hash-987654").isNotEqualTo("987654");
+        assertThat(saved.getOtpAttempts()).isZero();
+        assertThat(saved.getDescription()).isEqualTo("Description");
+        assertThat(saved.getStatus()).isEqualTo(Parcel.ParcelStatus.CREATED);
+        // La taquilla recibe el OTP en claro y la notificación mock se envía con él
+        assertThat(result.deliveryOtp()).isEqualTo("987654");
+        verify(notificationService).notifyParcelCreated(saved, "987654");
         verify(parcelMapper, never()).toResponse(any(Parcel.class));
+        verify(parcelMapper, never()).toPublicResponse(any(Parcel.class));
     }
-
-    @Test
-    void shouldDeliverWithOtp_WithValidOtp_ReturnDeliveredParcel() {
-        // Given
-        when(parcelRepository.findById(1L)).thenReturn(Optional.of(parcel));
-        when(otpGenerator.validateOtp("123456", "123456")).thenReturn(true);
-        when(parcelRepository.save(any(Parcel.class))).thenReturn(parcel);
-        when(parcelMapper.toResponse(any(Parcel.class))).thenReturn(parcelResponse);
-
-        // When
-        ParcelResponse result = parcelService.deliverWithOtp(1L, "123456", "photo.jpg");
-
-        // Then
-        assertThat(result).isNotNull();
-        verify(parcelRepository).save(argThat(p -> 
-            p.getStatus() == Parcel.ParcelStatus.DELIVERED
-        ));
-    }
-
-    @Test
-    void shouldDeliverWithOtp_WithInvalidOtp_CreateIncident() {
-        // Given
-        when(parcelRepository.findById(1L)).thenReturn(Optional.of(parcel));
-        when(otpGenerator.validateOtp("000000", "123456")).thenReturn(false);
-        when(parcelRepository.save(any(Parcel.class))).thenReturn(parcel);
-        when(incidentRepository.save(any(Incident.class))).thenAnswer(inv -> {
-            Incident i = inv.getArgument(0);
-            return i;
-        });
-
-        // When/Then
-        assertThatThrownBy(() -> parcelService.deliverWithOtp(1L, "000000", "photo.jpg"))
-                .isInstanceOf(BusinessException.class)
-                .hasMessageContaining("OTP inválido");
-
-        verify(parcelRepository).save(argThat(p -> 
-            p.getStatus() == Parcel.ParcelStatus.FAILED
-        ));
-        verify(incidentRepository).save(any(Incident.class));
-    }
-
-    @Test
-    void shouldUpdateStatus_WithValidStatus_UpdateParcel() {
-        // Given
-        parcel.setStatus(Parcel.ParcelStatus.CREATED);
-        when(parcelRepository.findById(1L)).thenReturn(Optional.of(parcel));
-        when(parcelRepository.save(any(Parcel.class))).thenReturn(parcel);
-        when(parcelMapper.toResponse(any(Parcel.class))).thenReturn(parcelResponse);
-
-        // When
-        ParcelResponse result = parcelService.updateStatus(1L, Parcel.ParcelStatus.IN_TRANSIT);
-
-        // Then
-        assertThat(result).isNotNull();
-        verify(parcelRepository).save(argThat(p ->
-            p.getStatus() == Parcel.ParcelStatus.IN_TRANSIT
-        ));
-    }
-
-    @Test
-    void shouldUpdateStatus_ToDeliveredWithoutOtp_ThrowException() {
-        // Given
-        when(parcelRepository.findById(1L)).thenReturn(Optional.of(parcel));
-
-        // When/Then: DELIVERED solo se alcanza con deliverWithOtp
-        assertThatThrownBy(() -> parcelService.updateStatus(1L, Parcel.ParcelStatus.DELIVERED))
-                .isInstanceOf(BusinessException.class)
-                .hasMessageContaining("OTP");
-        verify(parcelRepository, never()).save(any());
-    }
-
-    @Test
-    void shouldGetParcelsInTransit_WithValidTripId_ReturnList() {
-        // Given
-        List<Parcel> parcels = List.of(parcel);
-        List<ParcelResponse> responses = List.of(parcelResponse);
-
-        when(parcelRepository.findByTripIdAndStatus(1L, Parcel.ParcelStatus.IN_TRANSIT))
-                .thenReturn(parcels);
-        when(parcelMapper.toResponseList(parcels)).thenReturn(responses);
-
-        // When
-        List<ParcelResponse> result = parcelService.getParcelsInTransit(1L);
-
-        // Then
-        assertThat(result).isNotNull();
-        assertThat(result).hasSize(1);
-        verify(parcelRepository).findByTripIdAndStatus(1L, Parcel.ParcelStatus.IN_TRANSIT);
-    }
-
-    // ==================== getAllParcels ====================
-
-    @Test
-    void shouldGetAllParcels_WithParcels_MapEachOne() {
-        // Given
-        Parcel other = Parcel.builder().id(2L).code("PARCEL002").build();
-        ParcelResponse otherResponse = new ParcelResponse(
-                2L, "PARCEL002", 1L, "Route Name", null,
-                "Sender", "1", "Receiver", "2",
-                1L, "Origin", 2L, "Destination",
-                null, null, Parcel.ParcelStatus.CREATED,
-                "654321", null, null, null
-        );
-        when(parcelRepository.findAll()).thenReturn(List.of(parcel, other));
-        when(parcelMapper.toResponse(parcel)).thenReturn(parcelResponse);
-        when(parcelMapper.toResponse(other)).thenReturn(otherResponse);
-
-        // When
-        List<ParcelResponse> result = parcelService.getAllParcels();
-
-        // Then
-        assertThat(result).containsExactly(parcelResponse, otherResponse);
-    }
-
-    @Test
-    void shouldGetAllParcels_WithoutParcels_ReturnEmptyList() {
-        // Given
-        when(parcelRepository.findAll()).thenReturn(List.of());
-
-        // When
-        List<ParcelResponse> result = parcelService.getAllParcels();
-
-        // Then
-        assertThat(result).isEmpty();
-        verifyNoInteractions(parcelMapper);
-    }
-
-    // ==================== createParcel ====================
 
     @Test
     void shouldCreateParcel_WithNonExistentTrip_ThrowResourceNotFound() {
@@ -301,7 +205,7 @@ class ParcelServiceImplTest {
         assertThatThrownBy(() -> parcelService.createParcel(request))
                 .isInstanceOf(ResourceNotFoundException.class)
                 .hasMessageContaining("Viaje");
-        verifyNoInteractions(stopRepository, parcelRepository);
+        verifyNoInteractions(stopRepository, parcelRepository, notificationService);
     }
 
     @Test
@@ -370,40 +274,42 @@ class ParcelServiceImplTest {
         verifyNoInteractions(qrCodeGenerator, otpGenerator, parcelRepository);
     }
 
-    @Test
-    void shouldCreateParcel_WithValidRequest_SetRelationsCodeAndOtp() {
-        // Given: el mapper devuelve una entidad sin relaciones ni código
+    @ParameterizedTest
+    @EnumSource(value = Trip.TripStatus.class, names = {"DEPARTED", "ARRIVED", "CANCELLED"})
+    void shouldCreateParcel_WithTripAlreadyDepartedOrCancelled_ThrowTripNotAvailable(Trip.TripStatus status) {
+        // Given
+        trip.setStatus(status);
         ParcelCreateRequest request = buildParcelRequest();
-        Parcel mapped = Parcel.builder()
-                .senderName("Sender")
-                .receiverName("Receiver")
-                .price(BigDecimal.valueOf(10000))
-                .build();
         when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
-        when(stopRepository.findById(1L)).thenReturn(Optional.of(fromStop));
-        when(stopRepository.findById(2L)).thenReturn(Optional.of(toStop));
-        when(qrCodeGenerator.generateParcelCode()).thenReturn("PCL-XYZ");
-        when(otpGenerator.generate6DigitOtp()).thenReturn("987654");
-        when(parcelMapper.toEntity(request)).thenReturn(mapped);
-        when(parcelRepository.save(any(Parcel.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(parcelMapper.toResponseWithOtp(any(Parcel.class))).thenReturn(parcelResponse);
 
-        // When
-        parcelService.createParcel(request);
-
-        // Then
-        ArgumentCaptor<Parcel> captor = ArgumentCaptor.forClass(Parcel.class);
-        verify(parcelRepository).save(captor.capture());
-        Parcel saved = captor.getValue();
-        assertThat(saved.getTrip()).isSameAs(trip);
-        assertThat(saved.getFromStop()).isSameAs(fromStop);
-        assertThat(saved.getToStop()).isSameAs(toStop);
-        assertThat(saved.getCode()).isEqualTo("PCL-XYZ");
-        assertThat(saved.getDeliveryOtp()).isEqualTo("987654");
-        assertThat(saved.getStatus()).isEqualTo(Parcel.ParcelStatus.CREATED);
+        // When/Then
+        assertThatThrownBy(() -> parcelService.createParcel(request))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining(status.name())
+                .satisfies(ex -> {
+                    BusinessException be = (BusinessException) ex;
+                    assertThat(be.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+                    assertThat(be.getCode()).isEqualTo("TRIP_NOT_AVAILABLE");
+                });
+        verifyNoInteractions(stopRepository, qrCodeGenerator, otpGenerator, parcelMapper, notificationService);
+        verify(parcelRepository, never()).save(any());
     }
 
     // ==================== trackParcel ====================
+
+    @Test
+    void shouldTrackParcel_WithValidCode_UsePublicResponse() {
+        // Given
+        when(parcelRepository.findByCode("PARCEL001")).thenReturn(Optional.of(parcel));
+        when(parcelMapper.toPublicResponse(parcel)).thenReturn(parcelResponse);
+
+        // When
+        ParcelResponse result = parcelService.trackParcel("PARCEL001");
+
+        // Then: el rastreo público nunca usa el mapeo del personal
+        assertThat(result.code()).isEqualTo("PARCEL001");
+        verify(parcelMapper, never()).toResponse(any(Parcel.class));
+    }
 
     @Test
     void shouldTrackParcel_WithUnknownCode_ThrowResourceNotFound() {
@@ -418,39 +324,151 @@ class ParcelServiceImplTest {
         verifyNoInteractions(parcelMapper);
     }
 
+    // ==================== searchParcels ====================
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void shouldSearchParcels_WithFilters_QueryOrderedByCreationDesc() {
+        // Given
+        when(parcelRepository.findAll(any(Specification.class), any(Sort.class))).thenReturn(List.of(parcel));
+        when(parcelMapper.toResponseList(List.of(parcel))).thenReturn(List.of(parcelResponse));
+
+        // When
+        List<ParcelResponse> result = parcelService.searchParcels(LocalDate.of(2026, 1, 1),
+                LocalDate.of(2026, 1, 31), Parcel.ParcelStatus.IN_TRANSIT);
+
+        // Then
+        assertThat(result).containsExactly(parcelResponse);
+        ArgumentCaptor<Sort> sort = ArgumentCaptor.forClass(Sort.class);
+        verify(parcelRepository).findAll(any(Specification.class), sort.capture());
+        assertThat(sort.getValue().getOrderFor("createdAt").getDirection()).isEqualTo(Sort.Direction.DESC);
+    }
+
+    @Test
+    void shouldSearchParcels_WithFromAfterTo_ThrowBadRequest() {
+        // When/Then
+        assertThatThrownBy(() -> parcelService.searchParcels(LocalDate.of(2026, 2, 1), LocalDate.of(2026, 1, 1), null))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    BusinessException be = (BusinessException) ex;
+                    assertThat(be.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+                    assertThat(be.getCode()).isEqualTo("INVALID_DATE_RANGE");
+                });
+        verifyNoInteractions(parcelRepository);
+    }
+
     // ==================== updateStatus ====================
 
     @Test
     void shouldUpdateStatus_WithNonExistentParcel_ThrowResourceNotFound() {
         // Given
-        when(parcelRepository.findById(99L)).thenReturn(Optional.empty());
+        when(parcelRepository.findByCode("NOPE")).thenReturn(Optional.empty());
 
         // When/Then
-        assertThatThrownBy(() -> parcelService.updateStatus(99L, Parcel.ParcelStatus.IN_TRANSIT))
+        assertThatThrownBy(() -> parcelService.updateStatus("NOPE", Parcel.ParcelStatus.IN_TRANSIT, null, null))
                 .isInstanceOf(ResourceNotFoundException.class)
                 .hasMessageContaining("Encomienda");
         verify(parcelRepository, never()).save(any());
     }
 
     @ParameterizedTest
-    @CsvSource({
-            "CREATED, IN_TRANSIT",
-            "IN_TRANSIT, FAILED"
-    })
-    void shouldUpdateStatus_WithAllowedTransition_SaveNewStatus(Parcel.ParcelStatus current,
-                                                               Parcel.ParcelStatus target) {
+    @EnumSource(value = Trip.TripStatus.class, names = {"BOARDING", "DEPARTED"})
+    void shouldUpdateStatus_ToInTransitWithTripOnTheRoad_SaveNewStatus(Trip.TripStatus tripStatus) {
         // Given
-        parcel.setStatus(current);
-        when(parcelRepository.findById(1L)).thenReturn(Optional.of(parcel));
-        when(parcelRepository.save(any(Parcel.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(parcelMapper.toResponse(any(Parcel.class))).thenReturn(parcelResponse);
+        trip.setStatus(tripStatus);
+        parcel.setStatus(Parcel.ParcelStatus.CREATED);
+        when(parcelRepository.findByCode("PARCEL001")).thenReturn(Optional.of(parcel));
+        when(parcelRepository.save(parcel)).thenReturn(parcel);
+        when(parcelMapper.toResponse(parcel)).thenReturn(parcelResponse);
 
         // When
-        ParcelResponse result = parcelService.updateStatus(1L, target);
+        ParcelResponse result = parcelService.updateStatus("PARCEL001", Parcel.ParcelStatus.IN_TRANSIT, null, null);
 
         // Then
         assertThat(result).isEqualTo(parcelResponse);
-        verify(parcelRepository).save(argThat(p -> p.getStatus() == target));
+        assertThat(parcel.getStatus()).isEqualTo(Parcel.ParcelStatus.IN_TRANSIT);
+        verify(parcelMapper, never()).toResponseWithOtp(any(Parcel.class), any());
+        verifyNoInteractions(incidentRepository);
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = Trip.TripStatus.class, names = {"SCHEDULED", "ARRIVED", "CANCELLED"})
+    void shouldUpdateStatus_ToInTransitWithTripNotOnTheRoad_ThrowInvalidStateTransition(Trip.TripStatus tripStatus) {
+        // Given
+        trip.setStatus(tripStatus);
+        parcel.setStatus(Parcel.ParcelStatus.CREATED);
+        when(parcelRepository.findByCode("PARCEL001")).thenReturn(Optional.of(parcel));
+
+        // When/Then
+        assertThatThrownBy(() -> parcelService.updateStatus("PARCEL001", Parcel.ParcelStatus.IN_TRANSIT, null, null))
+                .isInstanceOf(InvalidStateTransitionException.class)
+                .hasMessageContaining(tripStatus.name())
+                .extracting("status").isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        assertThat(parcel.getStatus()).isEqualTo(Parcel.ParcelStatus.CREATED);
+        verify(parcelRepository, never()).save(any());
+    }
+
+    @Test
+    void shouldUpdateStatus_ToInTransitByUnassignedDriver_ThrowForbidden() {
+        // Given
+        authenticate("otro@test.com", "DRIVER");
+        parcel.setStatus(Parcel.ParcelStatus.CREATED);
+        when(parcelRepository.findByCode("PARCEL001")).thenReturn(Optional.of(parcel));
+        when(assignmentRepository.findByTripId(1L)).thenReturn(Optional.of(Assignment.builder()
+                .driver(User.builder().email("driver@test.com").build()).build()));
+
+        // When/Then
+        assertThatThrownBy(() -> parcelService.updateStatus("PARCEL001", Parcel.ParcelStatus.IN_TRANSIT, null, null))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    BusinessException be = (BusinessException) ex;
+                    assertThat(be.getStatus()).isEqualTo(HttpStatus.FORBIDDEN);
+                    assertThat(be.getCode()).isEqualTo("DRIVER_NOT_ASSIGNED");
+                });
+        verify(parcelRepository, never()).save(any());
+    }
+
+    @Test
+    void shouldUpdateStatus_ToInTransitByAssignedDriver_SaveNewStatus() {
+        // Given
+        authenticate("driver@test.com", "DRIVER");
+        parcel.setStatus(Parcel.ParcelStatus.CREATED);
+        when(parcelRepository.findByCode("PARCEL001")).thenReturn(Optional.of(parcel));
+        when(assignmentRepository.findByTripId(1L)).thenReturn(Optional.of(Assignment.builder()
+                .driver(User.builder().email("driver@test.com").build()).build()));
+        when(parcelRepository.save(parcel)).thenReturn(parcel);
+        when(parcelMapper.toResponse(parcel)).thenReturn(parcelResponse);
+
+        // When
+        parcelService.updateStatus("PARCEL001", Parcel.ParcelStatus.IN_TRANSIT, null, null);
+
+        // Then
+        assertThat(parcel.getStatus()).isEqualTo(Parcel.ParcelStatus.IN_TRANSIT);
+    }
+
+    @Test
+    void shouldUpdateStatus_ToFailedManually_CreateIncidentReportedByCurrentUser() {
+        // Given
+        authenticate("clerk@test.com", "CLERK");
+        User clerk = User.builder().id(8L).email("clerk@test.com").build();
+        when(parcelRepository.findByCode("PARCEL001")).thenReturn(Optional.of(parcel));
+        when(parcelRepository.save(parcel)).thenReturn(parcel);
+        when(userRepository.findByEmail("clerk@test.com")).thenReturn(Optional.of(clerk));
+        when(parcelMapper.toResponse(parcel)).thenReturn(parcelResponse);
+
+        // When
+        parcelService.updateStatus("PARCEL001", Parcel.ParcelStatus.FAILED, null, null);
+
+        // Then
+        assertThat(parcel.getStatus()).isEqualTo(Parcel.ParcelStatus.FAILED);
+        ArgumentCaptor<Incident> captor = ArgumentCaptor.forClass(Incident.class);
+        verify(incidentRepository).save(captor.capture());
+        Incident incident = captor.getValue();
+        assertThat(incident.getEntityType()).isEqualTo(Incident.EntityType.PARCEL);
+        assertThat(incident.getEntityId()).isEqualTo(1L);
+        assertThat(incident.getIncidentType()).isEqualTo(Incident.IncidentType.DELIVERY_FAIL);
+        assertThat(incident.getReportedBy()).isSameAs(clerk);
+        assertThat(incident.getDescription()).contains("PARCEL001");
     }
 
     @ParameterizedTest
@@ -470,10 +488,10 @@ class ParcelServiceImplTest {
                                                                                 Parcel.ParcelStatus target) {
         // Given
         parcel.setStatus(current);
-        when(parcelRepository.findById(1L)).thenReturn(Optional.of(parcel));
+        when(parcelRepository.findByCode("PARCEL001")).thenReturn(Optional.of(parcel));
 
-        // When/Then
-        assertThatThrownBy(() -> parcelService.updateStatus(1L, target))
+        // When/Then: FAILED → IN_TRANSIT solo con la reapertura de DISPATCHER/ADMIN
+        assertThatThrownBy(() -> parcelService.updateStatus("PARCEL001", target, null, null))
                 .isInstanceOf(InvalidStateTransitionException.class)
                 .hasMessageContaining(current.name())
                 .hasMessageContaining(target.name())
@@ -484,17 +502,14 @@ class ParcelServiceImplTest {
                 });
         assertThat(parcel.getStatus()).isEqualTo(current);
         verify(parcelRepository, never()).save(any());
+        verifyNoInteractions(incidentRepository);
     }
 
     @ParameterizedTest
-    @EnumSource(Parcel.ParcelStatus.class)
-    void shouldUpdateStatus_ToDeliveredFromAnyStatus_RequireOtp(Parcel.ParcelStatus current) {
-        // Given
-        parcel.setStatus(current);
-        when(parcelRepository.findById(1L)).thenReturn(Optional.of(parcel));
-
-        // When/Then: DELIVERED nunca se alcanza por updateStatus, ni siquiera desde IN_TRANSIT
-        assertThatThrownBy(() -> parcelService.updateStatus(1L, Parcel.ParcelStatus.DELIVERED))
+    @CsvSource(value = {"NULL, photo.jpg", "123456, NULL", "' ', photo.jpg", "123456, ' '"}, nullValues = "NULL")
+    void shouldUpdateStatus_ToDeliveredWithoutOtpOrPhoto_ThrowDeliveryRequiresOtp(String otp, String photo) {
+        // When/Then
+        assertThatThrownBy(() -> parcelService.updateStatus("PARCEL001", Parcel.ParcelStatus.DELIVERED, otp, photo))
                 .isInstanceOf(BusinessException.class)
                 .isNotInstanceOf(InvalidStateTransitionException.class)
                 .satisfies(ex -> {
@@ -502,8 +517,25 @@ class ParcelServiceImplTest {
                     assertThat(be.getCode()).isEqualTo("DELIVERY_REQUIRES_OTP");
                     assertThat(be.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
                 });
-        assertThat(parcel.getStatus()).isEqualTo(current);
-        verify(parcelRepository, never()).save(any());
+        verifyNoInteractions(parcelRepository, otpGenerator);
+    }
+
+    @Test
+    void shouldUpdateStatus_ToDeliveredWithOtpAndPhoto_DelegateToOtpDelivery() {
+        // Given
+        when(parcelRepository.findByCode("PARCEL001")).thenReturn(Optional.of(parcel));
+        when(otpGenerator.matchesOtp("PARCEL001", "123456", HASH)).thenReturn(true);
+        when(parcelRepository.save(parcel)).thenReturn(parcel);
+        when(parcelMapper.toResponse(parcel)).thenReturn(parcelResponse);
+
+        // When
+        parcelService.updateStatus("PARCEL001", Parcel.ParcelStatus.DELIVERED, "123456", "https://foto");
+
+        // Then: mismo resultado que /deliver
+        assertThat(parcel.getStatus()).isEqualTo(Parcel.ParcelStatus.DELIVERED);
+        assertThat(parcel.getProofPhotoUrl()).isEqualTo("https://foto");
+        assertThat(parcel.getDeliveredAt()).isNotNull();
+        verifyNoInteractions(incidentRepository);
     }
 
     // ==================== deliverWithOtp ====================
@@ -511,10 +543,10 @@ class ParcelServiceImplTest {
     @Test
     void shouldDeliverWithOtp_WithNonExistentParcel_ThrowResourceNotFound() {
         // Given
-        when(parcelRepository.findById(99L)).thenReturn(Optional.empty());
+        when(parcelRepository.findByCode("NOPE")).thenReturn(Optional.empty());
 
         // When/Then
-        assertThatThrownBy(() -> parcelService.deliverWithOtp(99L, "123456", "photo.jpg"))
+        assertThatThrownBy(() -> parcelService.deliverWithOtp("NOPE", "123456", "photo.jpg"))
                 .isInstanceOf(ResourceNotFoundException.class)
                 .hasMessageContaining("Encomienda");
         verifyNoInteractions(otpGenerator, incidentRepository);
@@ -522,18 +554,19 @@ class ParcelServiceImplTest {
 
     @ParameterizedTest
     @EnumSource(value = Parcel.ParcelStatus.class, names = {"CREATED", "FAILED", "DELIVERED"})
-    void shouldDeliverWithOtp_WithParcelNotInTransit_ThrowInvalidParcelStatus(Parcel.ParcelStatus status) {
+    void shouldDeliverWithOtp_WithParcelNotInTransit_ThrowInvalidStateTransition(Parcel.ParcelStatus status) {
         // Given
         parcel.setStatus(status);
-        when(parcelRepository.findById(1L)).thenReturn(Optional.of(parcel));
+        when(parcelRepository.findByCode("PARCEL001")).thenReturn(Optional.of(parcel));
 
-        // When/Then
-        assertThatThrownBy(() -> parcelService.deliverWithOtp(1L, "123456", "photo.jpg"))
-                .isInstanceOf(BusinessException.class)
+        // When/Then: estado inválido para la transición → 422 (no 400)
+        assertThatThrownBy(() -> parcelService.deliverWithOtp("PARCEL001", "123456", "photo.jpg"))
+                .isInstanceOf(InvalidStateTransitionException.class)
+                .hasMessageContaining(status.name())
                 .satisfies(ex -> {
                     BusinessException be = (BusinessException) ex;
-                    assertThat(be.getCode()).isEqualTo("INVALID_PARCEL_STATUS");
-                    assertThat(be.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+                    assertThat(be.getCode()).isEqualTo("INVALID_STATE_TRANSITION");
+                    assertThat(be.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
                 });
         assertThat(parcel.getStatus()).isEqualTo(status);
         verifyNoInteractions(otpGenerator, incidentRepository);
@@ -544,13 +577,13 @@ class ParcelServiceImplTest {
     void shouldDeliverWithOtp_WithValidOtp_SetProofPhotoAndDeliveryTime() {
         // Given
         LocalDateTime before = LocalDateTime.now();
-        when(parcelRepository.findById(1L)).thenReturn(Optional.of(parcel));
-        when(otpGenerator.validateOtp("123456", "123456")).thenReturn(true);
+        when(parcelRepository.findByCode("PARCEL001")).thenReturn(Optional.of(parcel));
+        when(otpGenerator.matchesOtp("PARCEL001", "123456", HASH)).thenReturn(true);
         when(parcelRepository.save(any(Parcel.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(parcelMapper.toResponse(any(Parcel.class))).thenReturn(parcelResponse);
+        when(parcelMapper.toResponse(parcel)).thenReturn(parcelResponse);
 
         // When
-        parcelService.deliverWithOtp(1L, "123456", "https://fotos/prueba.jpg");
+        parcelService.deliverWithOtp("PARCEL001", "123456", "https://fotos/prueba.jpg");
 
         // Then
         ArgumentCaptor<Parcel> captor = ArgumentCaptor.forClass(Parcel.class);
@@ -560,134 +593,266 @@ class ParcelServiceImplTest {
         assertThat(saved.getProofPhotoUrl()).isEqualTo("https://fotos/prueba.jpg");
         assertThat(saved.getDeliveredAt()).isNotNull().isAfterOrEqualTo(before);
         verifyNoInteractions(incidentRepository);
+        verify(parcelMapper, never()).toResponseWithOtp(any(Parcel.class), any());
     }
 
     @Test
-    void shouldDeliverWithOtp_WithInvalidOtp_CreateIncidentWithoutLeakingOtp() {
+    void shouldDeliverWithOtp_WithoutPhoto_ThrowBadRequest() {
         // Given
-        when(parcelRepository.findById(1L)).thenReturn(Optional.of(parcel));
-        when(otpGenerator.validateOtp("000000", "123456")).thenReturn(false);
-        when(parcelRepository.save(any(Parcel.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(incidentRepository.save(any(Incident.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(parcelRepository.findByCode("PARCEL001")).thenReturn(Optional.of(parcel));
 
         // When/Then
-        assertThatThrownBy(() -> parcelService.deliverWithOtp(1L, "000000", "photo.jpg"))
+        assertThatThrownBy(() -> parcelService.deliverWithOtp("PARCEL001", "123456", " "))
                 .isInstanceOf(BusinessException.class)
+                .extracting("status").isEqualTo(HttpStatus.BAD_REQUEST);
+        verifyNoInteractions(otpGenerator, incidentRepository);
+    }
+
+    @Test
+    void shouldDeliverWithOtp_WithInvalidOtpBeforeMaxAttempts_CountAttemptWithoutFailing() {
+        // Given: máximo de 3 intentos y ninguno usado
+        when(parcelRepository.findByCode("PARCEL001")).thenReturn(Optional.of(parcel));
+        when(otpGenerator.matchesOtp("PARCEL001", "000000", HASH)).thenReturn(false);
+        when(configService.getParcelOtpMaxAttempts()).thenReturn(3);
+
+        // When/Then: 400 con los intentos restantes
+        assertThatThrownBy(() -> parcelService.deliverWithOtp("PARCEL001", "000000", "photo.jpg"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("Intentos restantes: 2")
                 .satisfies(ex -> {
                     BusinessException be = (BusinessException) ex;
                     assertThat(be.getCode()).isEqualTo("INVALID_OTP");
                     assertThat(be.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
                 });
 
+        assertThat(parcel.getOtpAttempts()).isEqualTo(1);
+        assertThat(parcel.getStatus()).isEqualTo(Parcel.ParcelStatus.IN_TRANSIT);
+        verify(parcelRepository).save(parcel);
+        verifyNoInteractions(incidentRepository);
+    }
+
+    @Test
+    void shouldDeliverWithOtp_WithInvalidOtpReachingMaxAttempts_FailAndCreateIncidentWithoutLeakingOtp() {
+        // Given: ya lleva 2 intentos fallidos de 3
+        authenticate("driver@test.com", "DRIVER");
+        User driver = User.builder().id(5L).email("driver@test.com").build();
+        parcel.setOtpAttempts(2);
+        when(parcelRepository.findByCode("PARCEL001")).thenReturn(Optional.of(parcel));
+        when(otpGenerator.matchesOtp("PARCEL001", "000000", HASH)).thenReturn(false);
+        when(configService.getParcelOtpMaxAttempts()).thenReturn(3);
+        when(userRepository.findByEmail("driver@test.com")).thenReturn(Optional.of(driver));
+
+        // When/Then
+        assertThatThrownBy(() -> parcelService.deliverWithOtp("PARCEL001", "000000", "photo.jpg"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("FAILED")
+                .extracting("code").isEqualTo("INVALID_OTP");
+
+        assertThat(parcel.getOtpAttempts()).isEqualTo(3);
+        assertThat(parcel.getStatus()).isEqualTo(Parcel.ParcelStatus.FAILED);
+        assertThat(parcel.getProofPhotoUrl()).isNull();
+        assertThat(parcel.getDeliveredAt()).isNull();
         ArgumentCaptor<Incident> captor = ArgumentCaptor.forClass(Incident.class);
         verify(incidentRepository).save(captor.capture());
         Incident incident = captor.getValue();
         assertThat(incident.getEntityType()).isEqualTo(Incident.EntityType.PARCEL);
         assertThat(incident.getEntityId()).isEqualTo(1L);
         assertThat(incident.getIncidentType()).isEqualTo(Incident.IncidentType.DELIVERY_FAIL);
-        assertThat(incident.getDescription()).contains("PARCEL001").doesNotContain("123456");
+        assertThat(incident.getReportedBy()).isSameAs(driver);
+        assertThat(incident.getDescription()).contains("PARCEL001").doesNotContain("000000").doesNotContain(HASH);
         assertThat(incident.getCreatedAt()).isNotNull();
-        assertThat(parcel.getProofPhotoUrl()).isNull();
-        assertThat(parcel.getDeliveredAt()).isNull();
         verifyNoInteractions(parcelMapper);
     }
 
-    // ==================== getParcelsByDateRange ====================
+    // ==================== reopenParcel ====================
+
+    @ParameterizedTest
+    @EnumSource(value = Parcel.ParcelStatus.class, names = {"CREATED", "IN_TRANSIT", "DELIVERED"})
+    void shouldReopenParcel_WhenNotFailed_ThrowInvalidStateTransition(Parcel.ParcelStatus status) {
+        // Given
+        parcel.setStatus(status);
+        when(parcelRepository.findByCode("PARCEL001")).thenReturn(Optional.of(parcel));
+
+        // When/Then
+        assertThatThrownBy(() -> parcelService.reopenParcel("PARCEL001", null))
+                .isInstanceOf(InvalidStateTransitionException.class);
+        verify(parcelRepository, never()).save(any());
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = Trip.TripStatus.class, names = {"BOARDING", "DEPARTED", "ARRIVED"})
+    void shouldReopenParcel_OnSameTrip_BackToInTransitWithAttemptsReset(Trip.TripStatus tripStatus) {
+        // Given
+        trip.setStatus(tripStatus);
+        parcel.setStatus(Parcel.ParcelStatus.FAILED);
+        parcel.setOtpAttempts(3);
+        when(parcelRepository.findByCode("PARCEL001")).thenReturn(Optional.of(parcel));
+        when(parcelRepository.save(parcel)).thenReturn(parcel);
+        when(parcelMapper.toResponse(parcel)).thenReturn(parcelResponse);
+
+        // When
+        parcelService.reopenParcel("PARCEL001", null);
+
+        // Then
+        assertThat(parcel.getStatus()).isEqualTo(Parcel.ParcelStatus.IN_TRANSIT);
+        assertThat(parcel.getOtpAttempts()).isZero();
+        assertThat(parcel.getTrip()).isSameAs(trip);
+        verifyNoInteractions(tripRepository);
+    }
+
+    @Test
+    void shouldReopenParcel_OnCancelledTripWithoutNewTrip_ThrowInvalidStateTransition() {
+        // Given
+        trip.setStatus(Trip.TripStatus.CANCELLED);
+        parcel.setStatus(Parcel.ParcelStatus.FAILED);
+        when(parcelRepository.findByCode("PARCEL001")).thenReturn(Optional.of(parcel));
+
+        // When/Then
+        assertThatThrownBy(() -> parcelService.reopenParcel("PARCEL001", null))
+                .isInstanceOf(InvalidStateTransitionException.class)
+                .hasMessageContaining("tripId");
+        verify(parcelRepository, never()).save(any());
+    }
+
+    @Test
+    void shouldReopenParcel_ReassignedToScheduledTrip_BackToCreated() {
+        // Given
+        trip.setStatus(Trip.TripStatus.CANCELLED);
+        parcel.setStatus(Parcel.ParcelStatus.FAILED);
+        parcel.setOtpAttempts(3);
+        Trip nextTrip = Trip.builder().id(2L).route(route).status(Trip.TripStatus.SCHEDULED).build();
+        when(parcelRepository.findByCode("PARCEL001")).thenReturn(Optional.of(parcel));
+        when(tripRepository.findById(2L)).thenReturn(Optional.of(nextTrip));
+        when(parcelRepository.save(parcel)).thenReturn(parcel);
+        when(parcelMapper.toResponse(parcel)).thenReturn(parcelResponse);
+
+        // When
+        parcelService.reopenParcel("PARCEL001", 2L);
+
+        // Then: aún no se carga en el bus
+        assertThat(parcel.getTrip()).isSameAs(nextTrip);
+        assertThat(parcel.getStatus()).isEqualTo(Parcel.ParcelStatus.CREATED);
+        assertThat(parcel.getOtpAttempts()).isZero();
+    }
+
+    @Test
+    void shouldReopenParcel_ReassignedToTripOfAnotherRoute_ThrowInvalidSegment() {
+        // Given
+        parcel.setStatus(Parcel.ParcelStatus.FAILED);
+        Trip otherRouteTrip = Trip.builder().id(3L).route(Route.builder().id(9L).build())
+                .status(Trip.TripStatus.SCHEDULED).build();
+        when(parcelRepository.findByCode("PARCEL001")).thenReturn(Optional.of(parcel));
+        when(tripRepository.findById(3L)).thenReturn(Optional.of(otherRouteTrip));
+
+        // When/Then
+        assertThatThrownBy(() -> parcelService.reopenParcel("PARCEL001", 3L))
+                .isInstanceOf(InvalidSegmentException.class);
+        assertThat(parcel.getStatus()).isEqualTo(Parcel.ParcelStatus.FAILED);
+        verify(parcelRepository, never()).save(any());
+    }
+
+    @Test
+    void shouldReopenParcel_ReassignedToUnknownTrip_ThrowResourceNotFound() {
+        // Given
+        parcel.setStatus(Parcel.ParcelStatus.FAILED);
+        when(parcelRepository.findByCode("PARCEL001")).thenReturn(Optional.of(parcel));
+        when(tripRepository.findById(99L)).thenReturn(Optional.empty());
+
+        // When/Then
+        assertThatThrownBy(() -> parcelService.reopenParcel("PARCEL001", 99L))
+                .isInstanceOf(ResourceNotFoundException.class)
+                .hasMessageContaining("99");
+    }
+
+    // ==================== getTripParcels ====================
+
+    @Test
+    void shouldGetTripParcels_WithUnknownTrip_ThrowResourceNotFound() {
+        // Given
+        when(tripRepository.existsById(99L)).thenReturn(false);
+
+        // When/Then
+        assertThatThrownBy(() -> parcelService.getTripParcels(99L, null))
+                .isInstanceOf(ResourceNotFoundException.class);
+        verifyNoInteractions(parcelRepository);
+    }
+
+    @Test
+    void shouldGetTripParcels_WithoutStatus_ReturnAllOfTheTrip() {
+        // Given
+        authenticate("clerk@test.com", "CLERK");
+        when(tripRepository.existsById(1L)).thenReturn(true);
+        when(parcelRepository.findByTripId(1L)).thenReturn(List.of(parcel));
+        when(parcelMapper.toResponseList(List.of(parcel))).thenReturn(List.of(parcelResponse));
+
+        // When
+        List<ParcelResponse> result = parcelService.getTripParcels(1L, null);
+
+        // Then
+        assertThat(result).containsExactly(parcelResponse);
+        verifyNoInteractions(assignmentRepository);
+    }
+
+    @Test
+    void shouldGetTripParcels_AsAssignedDriverWithStatus_FilterByStatus() {
+        // Given
+        authenticate("driver@test.com", "DRIVER");
+        when(tripRepository.existsById(1L)).thenReturn(true);
+        when(assignmentRepository.findByTripId(1L)).thenReturn(Optional.of(Assignment.builder()
+                .driver(User.builder().email("driver@test.com").build()).build()));
+        when(parcelRepository.findByTripIdAndStatus(1L, Parcel.ParcelStatus.IN_TRANSIT)).thenReturn(List.of(parcel));
+        when(parcelMapper.toResponseList(List.of(parcel))).thenReturn(List.of(parcelResponse));
+
+        // When
+        List<ParcelResponse> result = parcelService.getTripParcels(1L, Parcel.ParcelStatus.IN_TRANSIT);
+
+        // Then
+        assertThat(result).hasSize(1);
+        verify(parcelRepository, never()).findByTripId(any());
+    }
+
+    @Test
+    void shouldGetTripParcels_AsDriverOfAnotherTrip_ThrowForbidden() {
+        // Given
+        authenticate("driver@test.com", "DRIVER");
+        when(tripRepository.existsById(1L)).thenReturn(true);
+        when(assignmentRepository.findByTripId(1L)).thenReturn(Optional.empty());
+
+        // When/Then
+        assertThatThrownBy(() -> parcelService.getTripParcels(1L, null))
+                .isInstanceOf(BusinessException.class)
+                .extracting("status").isEqualTo(HttpStatus.FORBIDDEN);
+        verifyNoInteractions(parcelRepository);
+    }
+
+    // ==================== Consultas auxiliares ====================
+
+    @Test
+    void shouldGetParcelsInTransit_WithValidTripId_ReturnList() {
+        // Given
+        when(parcelRepository.findByTripIdAndStatus(1L, Parcel.ParcelStatus.IN_TRANSIT)).thenReturn(List.of(parcel));
+        when(parcelMapper.toResponseList(List.of(parcel))).thenReturn(List.of(parcelResponse));
+
+        // When
+        List<ParcelResponse> result = parcelService.getParcelsInTransit(1L);
+
+        // Then
+        assertThat(result).hasSize(1);
+    }
 
     @Test
     void shouldGetParcelsByDateRange_WithRange_DelegateToRepository() {
         // Given
         LocalDate start = LocalDate.of(2026, 1, 1);
         LocalDate end = LocalDate.of(2026, 1, 31);
-        List<Parcel> parcels = List.of(parcel);
-        when(parcelRepository.findByDateRange(start, end)).thenReturn(parcels);
-        when(parcelMapper.toResponseList(parcels)).thenReturn(List.of(parcelResponse));
+        when(parcelRepository.findByDateRange(start, end)).thenReturn(List.of(parcel));
+        when(parcelMapper.toResponseList(List.of(parcel))).thenReturn(List.of(parcelResponse));
 
         // When
         List<ParcelResponse> result = parcelService.getParcelsByDateRange(start, end);
 
         // Then
         assertThat(result).containsExactly(parcelResponse);
-    }
-
-    // ==================== Estado del viaje y exposición del OTP ====================
-
-    @ParameterizedTest
-    @EnumSource(value = Trip.TripStatus.class, names = {"DEPARTED", "ARRIVED", "CANCELLED"})
-    void shouldCreateParcel_WithTripAlreadyDepartedOrCancelled_ThrowTripNotAvailable(Trip.TripStatus status) {
-        // Given
-        trip.setStatus(status);
-        ParcelCreateRequest request = buildParcelRequest();
-        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
-
-        // When/Then
-        assertThatThrownBy(() -> parcelService.createParcel(request))
-                .isInstanceOf(BusinessException.class)
-                .hasMessageContaining(status.name())
-                .satisfies(ex -> {
-                    BusinessException be = (BusinessException) ex;
-                    assertThat(be.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
-                    assertThat(be.getCode()).isEqualTo("TRIP_NOT_AVAILABLE");
-                });
-        verifyNoInteractions(stopRepository, qrCodeGenerator, otpGenerator, parcelMapper);
-        verify(parcelRepository, never()).save(any());
-    }
-
-    @ParameterizedTest
-    @EnumSource(value = Trip.TripStatus.class, names = {"SCHEDULED", "BOARDING"})
-    void shouldCreateParcel_WithTripNotDeparted_ReturnResponseWithOtpOnly(Trip.TripStatus status) {
-        // Given
-        trip.setStatus(status);
-        ParcelCreateRequest request = buildParcelRequest();
-        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
-        when(stopRepository.findById(1L)).thenReturn(Optional.of(fromStop));
-        when(stopRepository.findById(2L)).thenReturn(Optional.of(toStop));
-        when(qrCodeGenerator.generateParcelCode()).thenReturn("PARCEL001");
-        when(otpGenerator.generate6DigitOtp()).thenReturn("123456");
-        when(parcelMapper.toEntity(request)).thenReturn(parcel);
-        when(parcelRepository.save(parcel)).thenReturn(parcel);
-        when(parcelMapper.toResponseWithOtp(parcel)).thenReturn(parcelResponse);
-
-        // When
-        ParcelResponse result = parcelService.createParcel(request);
-
-        // Then: la taquilla recibe el OTP; no se usan los mapeos sin OTP
-        assertThat(result).isSameAs(parcelResponse);
-        assertThat(result.deliveryOtp()).isEqualTo("123456");
-        verify(parcelMapper, never()).toResponse(any(Parcel.class));
-        verify(parcelMapper, never()).toPublicResponse(any(Parcel.class));
-    }
-
-    @Test
-    void shouldUpdateStatus_UseResponseWithoutOtp() {
-        // Given
-        parcel.setStatus(Parcel.ParcelStatus.CREATED);
-        when(parcelRepository.findById(1L)).thenReturn(Optional.of(parcel));
-        when(parcelRepository.save(parcel)).thenReturn(parcel);
-        when(parcelMapper.toResponse(parcel)).thenReturn(parcelResponse);
-
-        // When
-        parcelService.updateStatus(1L, Parcel.ParcelStatus.IN_TRANSIT);
-
-        // Then
-        verify(parcelMapper).toResponse(parcel);
-        verify(parcelMapper, never()).toResponseWithOtp(any(Parcel.class));
-    }
-
-    @Test
-    void shouldDeliverWithOtp_UseResponseWithoutOtp() {
-        // Given
-        when(parcelRepository.findById(1L)).thenReturn(Optional.of(parcel));
-        when(otpGenerator.validateOtp("123456", "123456")).thenReturn(true);
-        when(parcelRepository.save(parcel)).thenReturn(parcel);
-        when(parcelMapper.toResponse(parcel)).thenReturn(parcelResponse);
-
-        // When
-        parcelService.deliverWithOtp(1L, "123456", "photo.jpg");
-
-        // Then
-        verify(parcelMapper).toResponse(parcel);
-        verify(parcelMapper, never()).toResponseWithOtp(any(Parcel.class));
     }
 
     private ParcelCreateRequest buildParcelRequest() {
@@ -698,4 +863,3 @@ class ParcelServiceImplTest {
         );
     }
 }
-

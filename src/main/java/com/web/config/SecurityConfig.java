@@ -100,13 +100,17 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/v1/assignments").hasRole("DISPATCHER")
                         .requestMatchers("/api/v1/routes/*/overbooking-policies", "/api/v1/overbooking-policies/*").hasAnyRole("DISPATCHER", "ADMIN")
                         .requestMatchers(HttpMethod.POST, "/api/v1/incidents").hasAnyRole("DRIVER", "DISPATCHER", "CLERK")
-                        .requestMatchers(HttpMethod.GET, "/api/v1/incidents").hasAnyRole("ADMIN", "DISPATCHER")
+                        .requestMatchers(HttpMethod.GET, "/api/v1/incidents", "/api/v1/incidents/*").hasAnyRole("ADMIN", "DISPATCHER", "CLERK", "DRIVER")
+                        .requestMatchers(HttpMethod.PATCH, "/api/v1/incidents/*/resolve").hasAnyRole("ADMIN", "DISPATCHER")
 
                         // Parcels
-                        .requestMatchers(HttpMethod.GET, "/api/v1/parcels").hasAnyRole("CLERK", "ADMIN")
+                        .requestMatchers(HttpMethod.GET, "/api/v1/parcels").hasAnyRole("CLERK", "DISPATCHER", "ADMIN")
                         .requestMatchers(HttpMethod.POST, "/api/v1/parcels").hasAnyRole("CLERK", "ADMIN")
                         .requestMatchers(HttpMethod.PUT, "/api/v1/parcels/*/status").hasAnyRole("DRIVER", "CLERK")
+                        .requestMatchers(HttpMethod.POST, "/api/v1/parcels/*/status").hasAnyRole("DRIVER", "CLERK")
                         .requestMatchers(HttpMethod.POST, "/api/v1/parcels/*/deliver").hasAnyRole("DRIVER", "CLERK")
+                        .requestMatchers(HttpMethod.POST, "/api/v1/parcels/*/reopen").hasAnyRole("DISPATCHER", "ADMIN")
+                        .requestMatchers(HttpMethod.GET, "/api/v1/trips/*/parcels").hasAnyRole("DRIVER", "CLERK", "DISPATCHER", "ADMIN")
 
                         // Payments
                         .requestMatchers(HttpMethod.POST, "/api/v1/payments/confirm").hasRole("CLERK")
@@ -119,6 +123,9 @@ public class SecurityConfig {
 
                         // Tickets - requiere autenticación
                         .requestMatchers(HttpMethod.POST, "/api/v1/tickets/qr/*/board").hasAnyRole("DRIVER", "DISPATCHER")
+                        // Equipaje de un ticket: registro en taquilla; la consulta queda para cualquier autenticado
+                        .requestMatchers(HttpMethod.POST, "/api/v1/tickets/*/baggage").hasAnyRole("CLERK", "ADMIN")
+                        .requestMatchers(HttpMethod.DELETE, "/api/v1/tickets/*/baggage").hasRole("CLERK")
                         .requestMatchers("/api/v1/trips/*/seats/*/hold").authenticated()
                         .requestMatchers("/api/v1/trips/*/tickets").authenticated()
                         .requestMatchers("/api/v1/tickets/**").authenticated()

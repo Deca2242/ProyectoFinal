@@ -2,6 +2,7 @@ package com.web.repository;
 
 import com.web.entity.Parcel;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -9,7 +10,8 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 
-public interface ParcelRepository extends JpaRepository<Parcel, Long> {
+// JpaSpecificationExecutor: listado de encomiendas con filtros opcionales
+public interface ParcelRepository extends JpaRepository<Parcel, Long>, JpaSpecificationExecutor<Parcel> {
 
     // Buscar encomienda por código de rastreo
     Optional<Parcel> findByCode(String code);
@@ -58,18 +60,6 @@ public interface ParcelRepository extends JpaRepository<Parcel, Long> {
     List<Parcel> findParcelsForDeliveryAtStop(
         @Param("tripId") Long tripId,
         @Param("stopId") Long stopId
-    );
-
-    // Validar OTP para entrega
-    @Query("""
-        SELECT p FROM Parcel p
-        WHERE p.code = :code
-        AND p.deliveryOtp = :otp
-        AND p.status = 'IN_TRANSIT'
-    """)
-    Optional<Parcel> findByCodeAndOtp(
-        @Param("code") String code,
-        @Param("otp") String otp
     );
 
     // Métricas: Calcular ingresos por encomiendas

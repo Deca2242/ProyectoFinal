@@ -40,10 +40,27 @@ public class Incident {
     @Builder.Default
     private LocalDateTime createdAt = LocalDateTime.now();
 
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 10)
+    @Builder.Default
+    private IncidentStatus status = IncidentStatus.OPEN;
+
+    @Column(name = "resolved_at")
+    private LocalDateTime resolvedAt;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "resolved_by")
+    private User resolvedBy;
+
     public enum EntityType {
         TRIP,
         TICKET,
         PARCEL
+    }
+
+    public enum IncidentStatus {
+        OPEN,
+        RESOLVED
     }
 
     public enum IncidentType {

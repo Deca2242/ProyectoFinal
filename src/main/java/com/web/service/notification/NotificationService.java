@@ -1,6 +1,7 @@
 package com.web.service.notification;
 
 import com.web.dto.notification.NotificationResponse;
+import com.web.entity.Parcel;
 import com.web.entity.Ticket;
 import com.web.entity.Trip;
 
@@ -25,4 +26,7 @@ public interface NotificationService {
 
     // Todas las notificaciones, o solo las de un viaje si se indica tripId
     List<NotificationResponse> getNotifications(Long tripId);
+
+    // Encomienda registrada: al destinatario el OTP de entrega y al remitente el código de rastreo
+    void notifyParcelCreated(Parcel parcel, String otp);
 }

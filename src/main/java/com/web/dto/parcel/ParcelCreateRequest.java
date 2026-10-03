@@ -18,6 +18,6 @@ public record ParcelCreateRequest(
     String toStopName,
     @NotNull @jakarta.validation.constraints.Positive BigDecimal price,
     @jakarta.validation.constraints.Positive BigDecimal weightKg,
-    String description
+    @jakarta.validation.constraints.Size(max = 255) String description
 ) implements Serializable {}
 

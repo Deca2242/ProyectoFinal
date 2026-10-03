@@ -24,5 +24,8 @@ public interface IncidentMapper {
     @Mapping(target = "incidentType", source = "type")
     @Mapping(target = "reportedBy", ignore = true)
     @Mapping(target = "createdAt", ignore = true)
+    @Mapping(target = "status", ignore = true)
+    @Mapping(target = "resolvedAt", ignore = true)
+    @Mapping(target = "resolvedBy", ignore = true)
     Incident toEntity(IncidentCreateRequest request);
 }

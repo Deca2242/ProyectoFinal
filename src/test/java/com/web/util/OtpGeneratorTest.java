@@ -113,4 +113,43 @@ class OtpGeneratorTest {
         assertThat(otpGenerator.validateOtp("", "")).isFalse();
         assertThat(otpGenerator.validateOtp("  ", " ")).isFalse();
     }
+
+    @Test
+    void shouldHashOtp_AsSha256HexSaltedWithParcelCode() {
+        // Given / When
+        String hash = otpGenerator.hashOtp("PCL-1", "123456");
+
+        // Then: 64 caracteres hex, determinista, distinto del OTP y dependiente del código de la encomienda
+        assertThat(hash).hasSize(64).matches("[0-9a-f]{64}").doesNotContain("123456");
+        assertThat(otpGenerator.hashOtp("PCL-1", " 123456 ")).isEqualTo(hash);
+        assertThat(otpGenerator.hashOtp("PCL-2", "123456")).isNotEqualTo(hash);
+        // Mismo formato que la migración V16: sha256("PCL-1:123456") en hex
+        assertThat(hash).isEqualTo(sha256Hex("PCL-1:123456"));
+    }
+
+    @Test
+    void shouldMatchOtp_OnlyWithTheRightOtpAndCode() {
+        // Given
+        String stored = otpGenerator.hashOtp("PCL-1", "123456");
+
+        // When / Then
+        assertThat(otpGenerator.matchesOtp("PCL-1", "123456", stored)).isTrue();
+        assertThat(otpGenerator.matchesOtp("PCL-1", "000000", stored)).isFalse();
+        assertThat(otpGenerator.matchesOtp("PCL-2", "123456", stored)).isFalse();
+        // El hash guardado no sirve como OTP
+        assertThat(otpGenerator.matchesOtp("PCL-1", stored, stored)).isFalse();
+        assertThat(otpGenerator.matchesOtp("PCL-1", null, stored)).isFalse();
+        assertThat(otpGenerator.matchesOtp("PCL-1", " ", stored)).isFalse();
+        assertThat(otpGenerator.matchesOtp("PCL-1", "123456", null)).isFalse();
+    }
+
+    private static String sha256Hex(String value) {
+        try {
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(value.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            return java.util.HexFormat.of().formatHex(digest);
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+    }
 }

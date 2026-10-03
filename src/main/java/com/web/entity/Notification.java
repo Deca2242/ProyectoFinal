@@ -65,7 +65,8 @@ public class Notification {
         PLATFORM_CHANGED,
         ARRIVAL_SOON,
         TRIP_RESCHEDULED,
-        TRIP_CANCELLED
+        TRIP_CANCELLED,
+        PARCEL_CREATED
     }
 
     public enum NotificationStatus {

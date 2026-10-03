@@ -13,5 +13,7 @@ public record IncidentResponse(
     String description,
     Long reportedById,
     String reportedByName,
-    LocalDateTime createdAt
+    LocalDateTime createdAt,
+    Incident.IncidentStatus status,
+    LocalDateTime resolvedAt
 ) implements Serializable {}
