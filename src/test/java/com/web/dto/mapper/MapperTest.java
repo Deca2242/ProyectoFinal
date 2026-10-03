@@ -497,7 +497,7 @@ class MapperTest {
         Ticket ticket = Ticket.builder().id(77L).build();
         Baggage baggage = Baggage.builder()
                 .id(3L).ticket(ticket).weightKg(new BigDecimal("23.5"))
-                .excessFee(new BigDecimal("5000")).tagCode("BAG-1-000001").createdAt(CREATED_AT)
+                .excessFee(new BigDecimal("5000")).tagCode("BAG-1-000001").compartment("B").createdAt(CREATED_AT)
                 .build();
 
         // When
@@ -509,6 +509,7 @@ class MapperTest {
         assertThat(response.weightKg()).isEqualByComparingTo("23.5");
         assertThat(response.excessFee()).isEqualByComparingTo("5000");
         assertThat(response.tagCode()).isEqualTo("BAG-1-000001");
+        assertThat(response.compartment()).isEqualTo("B");
         assertThat(response.createdAt()).isEqualTo(CREATED_AT);
     }
 
@@ -931,18 +932,19 @@ class MapperTest {
                 .receiverName("Destinatario").receiverPhone("3005555555")
                 .fromStop(fromStop).toStop(toStop)
                 .price(new BigDecimal("15000")).weightKg(new BigDecimal("3.5"))
-                .status(Parcel.ParcelStatus.IN_TRANSIT).deliveryOtp("654321")
+                .status(Parcel.ParcelStatus.IN_TRANSIT).deliveryOtp("hash-del-otp").otpAttempts(1)
+                .description("Documentos")
                 .proofPhotoUrl("https://fotos/prueba.jpg").createdAt(CREATED_AT)
                 .build();
     }
 
     @Test
     void parcelMapper_ShouldMapEntityToResponse_IncludingOtp() {
-        // Given
+        // Given: la entidad solo guarda el hash; el OTP en claro lo aporta el servicio al crear
         Parcel parcel = buildParcel();
 
         // When
-        ParcelResponse response = parcelMapper.toResponseWithOtp(parcel);
+        ParcelResponse response = parcelMapper.toResponseWithOtp(parcel, "654321");
 
         // Then
         assertThat(response.id()).isEqualTo(400L);
@@ -964,6 +966,12 @@ class MapperTest {
         assertThat(response.deliveryOtp()).isEqualTo("654321");
         assertThat(response.proofPhotoUrl()).isEqualTo("https://fotos/prueba.jpg");
         assertThat(response.createdAt()).isEqualTo(CREATED_AT);
+        assertThat(response.description()).isEqualTo("Documentos");
+        assertThat(response.otpAttempts()).isEqualTo(1);
+        // El hash guardado nunca sale en ninguna respuesta
+        assertThat(parcelMapper.toResponse(parcel).deliveryOtp()).isNull();
+        assertThat(parcelMapper.toResponse(parcel).toString()).doesNotContain("hash-del-otp");
+        assertThat(parcelMapper.toResponseWithOtp(null, "654321")).isNull();
     }
 
     @Test
@@ -973,7 +981,7 @@ class MapperTest {
 
         // When
         ParcelResponse publicResponse = parcelMapper.toPublicResponse(parcel);
-        ParcelResponse internalResponse = parcelMapper.toResponseWithOtp(parcel);
+        ParcelResponse internalResponse = parcelMapper.toResponseWithOtp(parcel, "654321");
 
         // Then
         assertThat(publicResponse.deliveryOtp()).isNull();
@@ -995,7 +1003,7 @@ class MapperTest {
                 .ignoringFields("deliveryOtp", "senderName", "senderPhone", "receiverName", "receiverPhone")
                 .isEqualTo(internalResponse);
         // El OTP no debe aparecer ni siquiera en la representación textual del record
-        assertThat(publicResponse.toString()).doesNotContain("654321");
+        assertThat(publicResponse.toString()).doesNotContain("654321").doesNotContain("hash-del-otp");
         assertThat(parcelMapper.toPublicResponse(null)).isNull();
     }
 
@@ -1035,6 +1043,8 @@ class MapperTest {
         assertThat(entity.getReceiverPhone()).isEqualTo("3005555555");
         assertThat(entity.getPrice()).isEqualByComparingTo("15000");
         assertThat(entity.getWeightKg()).isEqualByComparingTo("2");
+        assertThat(entity.getDescription()).isEqualTo("Documentos");
+        assertThat(entity.getOtpAttempts()).isZero();
         assertThat(entity.getStatus()).isEqualTo(Parcel.ParcelStatus.CREATED);
         // Código, OTP y relaciones los genera/resuelve el servicio
         assertThat(entity.getCode()).isNull();

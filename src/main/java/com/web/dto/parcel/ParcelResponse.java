@@ -27,6 +27,8 @@ public record ParcelResponse(
     String deliveryOtp,  // Solo si status permite
     String proofPhotoUrl,
     LocalDateTime createdAt,
-    LocalDateTime deliveredAt
+    LocalDateTime deliveredAt,
+    String description,
+    Integer otpAttempts  // Intentos de OTP fallidos hasta ahora
 ) implements Serializable {}
 

@@ -201,6 +201,8 @@ class ProjectRequirementsIntegrationTest extends BaseIntegrationTest {
     void parcel_otpOnlyOnCreation_failedIsFinal_andTrackingHidesPersonalData() throws Exception {
         String clerkToken = staff("clerk@test.com", User.Role.CLERK);
         String driverToken = staff("driver@test.com", User.Role.DRIVER);
+        String dispatcherToken = staff("disp@test.com", User.Role.DISPATCHER);
+        assignAndApproveChecklist(dispatcherToken, "driver@test.com", "disp@test.com");
 
         String body = mvc.perform(post("/api/v1/parcels")
                         .header("Authorization", bearer(clerkToken))
@@ -214,20 +216,27 @@ class ProjectRequirementsIntegrationTest extends BaseIntegrationTest {
                 .andReturn().getResponse().getContentAsString();
         String code = om.readTree(body).get("code").asText();
 
-        // El conductor la pone en tránsito pero no ve el OTP
+        // Se carga en el bus durante el abordaje; el conductor asignado la pone en tránsito pero no ve el OTP
+        mvc.perform(post("/api/v1/trips/{id}/boarding/open", trip.getId()).header("Authorization", bearer(dispatcherToken)))
+                .andExpect(status().isOk());
         parcelStatus(driverToken, code, Parcel.ParcelStatus.IN_TRANSIT)
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.deliveryOtp").doesNotExist());
 
-        // OTP incorrecto: FAILED + incidente, y la respuesta tampoco trae el OTP
-        mvc.perform(post("/api/v1/parcels/{code}/deliver", code)
-                        .header("Authorization", bearer(driverToken))
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(om.writeValueAsString(new ParcelStatusUpdateRequest(
-                                code, Parcel.ParcelStatus.DELIVERED, "000000", "https://foto"))))
-                .andExpect(status().isBadRequest());
+        // OTP incorrecto: los dos primeros intentos solo descuentan; al tercero FAILED + incidente
+        String otp = om.readTree(body).get("deliveryOtp").asText();
+        String wrongOtp = otp.equals("000000") ? "111111" : "000000";
+        for (int attempt = 1; attempt <= 3; attempt++) {
+            mvc.perform(post("/api/v1/parcels/{code}/deliver", code)
+                            .header("Authorization", bearer(driverToken))
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(om.writeValueAsString(new ParcelStatusUpdateRequest(
+                                    code, Parcel.ParcelStatus.DELIVERED, wrongOtp, "https://foto"))))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.deliveryOtp").doesNotExist());
+        }
 
-        // FAILED es final: no se puede volver a IN_TRANSIT para reintentar el OTP
+        // FAILED no vuelve a IN_TRANSIT por /status para reintentar el OTP (solo DISPATCHER/ADMIN reabren)
         parcelStatus(driverToken, code, Parcel.ParcelStatus.IN_TRANSIT).andExpect(status().isUnprocessableEntity());
 
         // El rastreo público no expone OTP ni datos personales

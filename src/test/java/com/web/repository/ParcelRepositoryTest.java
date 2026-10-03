@@ -311,37 +311,6 @@ class ParcelRepositoryTest extends BaseRepositoryTest {
     }
 
     @Test
-    @DisplayName("Debe validar encomienda con código y OTP para entrega")
-    void shouldFindParcelByCodeAndOtp() {
-        // Given
-        Parcel parcel = Parcel.builder()
-                .code("PARC-OTP-1")
-                .trip(trip)
-                .senderName("Juan")
-                .senderPhone("3001234567")
-                .receiverName("María")
-                .receiverPhone("3007654321")
-                .fromStop(stopBogota)
-                .toStop(stopBucaramanga)
-                .price(new BigDecimal("30000.00"))
-                .status(Parcel.ParcelStatus.IN_TRANSIT)
-                .deliveryOtp("987654")
-                .build();
-        entityManager.persist(parcel);
-        entityManager.flush();
-
-        // When - OTP correcto
-        Optional<Parcel> validResult = parcelRepository.findByCodeAndOtp("PARC-OTP-1", "987654");
-
-        // OTP incorrecto
-        Optional<Parcel> invalidResult = parcelRepository.findByCodeAndOtp("PARC-OTP-1", "000000");
-
-        // Then
-        assertThat(validResult).isPresent();
-        assertThat(invalidResult).isEmpty();
-    }
-
-    @Test
     @DisplayName("Debe calcular ingresos por encomiendas en rango de fechas")
     void shouldCalculateParcelRevenue() {
         // Given - encomiendas con diferentes estados

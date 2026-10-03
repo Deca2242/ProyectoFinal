@@ -580,8 +580,9 @@ class DispatchControllerTest {
     @ParameterizedTest
     @ValueSource(strings = {"DISPATCHER", "DRIVER", "CLERK"})
     void getTripBaggage_shouldReturn200ForAllowedRoles(String role) throws Exception {
-        var item = new BaggageResponse(1L, 10L, new BigDecimal("25.00"), new BigDecimal("10000.00"), "TAG-1", LocalDateTime.now());
-        var resp = new TripBaggageSummaryResponse(1L, 1, new BigDecimal("25.00"), new BigDecimal("10000.00"), List.of(item));
+        var item = new BaggageResponse(1L, 10L, new BigDecimal("25.00"), new BigDecimal("10000.00"), "TAG-1", "MAIN", LocalDateTime.now());
+        var resp = new TripBaggageSummaryResponse(1L, 1, new BigDecimal("25.00"), new BigDecimal("10000.00"), List.of(item),
+                java.util.Map.of("MAIN", new TripBaggageSummaryResponse.CompartmentSummary(1, new BigDecimal("25.00"))));
         when(baggageSummaryService.getTripBaggage(1L)).thenReturn(resp);
 
         mvc.perform(get("/api/v1/trips/1/baggage").with(user("u@test.com").roles(role)))

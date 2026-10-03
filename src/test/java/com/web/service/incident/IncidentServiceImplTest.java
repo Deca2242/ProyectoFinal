@@ -70,7 +70,7 @@ class IncidentServiceImplTest {
 
     private IncidentResponse response() {
         return new IncidentResponse(1L, Incident.IncidentType.VEHICLE, Incident.EntityType.TRIP, 5L,
-                "Llanta pinchada", 7L, "Conductor", LocalDateTime.now());
+                "Llanta pinchada", 7L, "Conductor", LocalDateTime.now(), Incident.IncidentStatus.OPEN, null);
     }
 
     // ---------- Reporte ----------
@@ -166,13 +166,15 @@ class IncidentServiceImplTest {
     @SuppressWarnings("unchecked")
     void shouldSearchIncidents_WithFilters_QueryOrderedByDateDesc() {
         // Given
+        authenticate("admin@test.com", "ADMIN");
         Incident incident = Incident.builder().id(1L).build();
         when(incidentRepository.findAll(any(Specification.class), any(Sort.class))).thenReturn(List.of(incident));
         when(incidentMapper.toResponseList(List.of(incident))).thenReturn(List.of(response()));
 
         // When
         List<IncidentResponse> result = incidentService.searchIncidents(Incident.IncidentType.VEHICLE,
-                Incident.EntityType.TRIP, 5L, LocalDate.of(2026, 1, 1), LocalDate.of(2026, 1, 31));
+                Incident.EntityType.TRIP, 5L, LocalDate.of(2026, 1, 1), LocalDate.of(2026, 1, 31),
+                Incident.IncidentStatus.OPEN, null);
 
         // Then
         assertThat(result).hasSize(1);
@@ -185,11 +187,12 @@ class IncidentServiceImplTest {
     @SuppressWarnings("unchecked")
     void shouldSearchIncidents_WithoutFilters_ReturnAll() {
         // Given
+        authenticate("dispatcher@test.com", "DISPATCHER");
         when(incidentRepository.findAll(any(Specification.class), any(Sort.class))).thenReturn(List.of());
         when(incidentMapper.toResponseList(List.of())).thenReturn(List.of());
 
         // When
-        List<IncidentResponse> result = incidentService.searchIncidents(null, null, null, null, null);
+        List<IncidentResponse> result = incidentService.searchIncidents(null, null, null, null, null, null, null);
 
         // Then
         assertThat(result).isEmpty();
@@ -199,9 +202,155 @@ class IncidentServiceImplTest {
     void shouldSearchIncidents_WithFromAfterTo_ThrowBadRequest() {
         // When/Then
         assertThatThrownBy(() -> incidentService.searchIncidents(null, null, null,
-                LocalDate.of(2026, 2, 1), LocalDate.of(2026, 1, 1)))
+                LocalDate.of(2026, 2, 1), LocalDate.of(2026, 1, 1), null, null))
                 .isInstanceOf(BusinessException.class)
                 .extracting("code").isEqualTo("INVALID_DATE_RANGE");
         verifyNoInteractions(incidentRepository);
+    }
+
+    // ---------- Filtro reportedBy=me ----------
+
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"CLERK", "DRIVER"})
+    void shouldSearchIncidents_AsClerkOrDriverWithoutReportedByMe_ThrowForbidden(String role) {
+        // Given
+        authenticate("staff@test.com", role);
+
+        // When/Then: sin reportedBy=me solo ADMIN y DISPATCHER ven todos los incidentes
+        assertThatThrownBy(() -> incidentService.searchIncidents(null, null, null, null, null, null, null))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    BusinessException be = (BusinessException) ex;
+                    assertThat(be.getStatus()).isEqualTo(HttpStatus.FORBIDDEN);
+                    assertThat(be.getCode()).isEqualTo("INCIDENTS_ONLY_OWN");
+                });
+        verifyNoInteractions(incidentRepository);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void shouldSearchIncidents_WithReportedByMe_FilterByAuthenticatedUser() {
+        // Given
+        authenticate("driver@test.com", "DRIVER");
+        User driver = User.builder().id(7L).email("driver@test.com").build();
+        when(userRepository.findByEmail("driver@test.com")).thenReturn(Optional.of(driver));
+        when(incidentRepository.findAll(any(Specification.class), any(Sort.class))).thenReturn(List.of());
+        when(incidentMapper.toResponseList(List.of())).thenReturn(List.of());
+
+        // When
+        List<IncidentResponse> result = incidentService.searchIncidents(null, null, null, null, null, null, "me");
+
+        // Then
+        assertThat(result).isEmpty();
+        verify(userRepository).findByEmail("driver@test.com");
+    }
+
+    @Test
+    void shouldSearchIncidents_WithReportedByOtherThanMe_ThrowBadRequest() {
+        // Given
+        authenticate("admin@test.com", "ADMIN");
+
+        // When/Then
+        assertThatThrownBy(() -> incidentService.searchIncidents(null, null, null, null, null, null, "7"))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    BusinessException be = (BusinessException) ex;
+                    assertThat(be.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+                    assertThat(be.getCode()).isEqualTo("INVALID_REPORTED_BY");
+                });
+        verifyNoInteractions(incidentRepository);
+    }
+
+    // ---------- Detalle ----------
+
+    @Test
+    void shouldGetIncident_AsReporter_ReturnIt() {
+        // Given
+        authenticate("clerk@test.com", "CLERK");
+        Incident incident = Incident.builder().id(1L)
+                .reportedBy(User.builder().id(8L).email("clerk@test.com").build()).build();
+        when(incidentRepository.findById(1L)).thenReturn(Optional.of(incident));
+        when(incidentMapper.toResponse(incident)).thenReturn(response());
+
+        // When
+        IncidentResponse result = incidentService.getIncident(1L);
+
+        // Then
+        assertThat(result.id()).isEqualTo(1L);
+    }
+
+    @Test
+    void shouldGetIncident_AsOtherClerk_ThrowForbidden() {
+        // Given
+        authenticate("other@test.com", "CLERK");
+        Incident incident = Incident.builder().id(1L)
+                .reportedBy(User.builder().id(8L).email("clerk@test.com").build()).build();
+        when(incidentRepository.findById(1L)).thenReturn(Optional.of(incident));
+
+        // When/Then
+        assertThatThrownBy(() -> incidentService.getIncident(1L))
+                .isInstanceOf(BusinessException.class)
+                .extracting("status").isEqualTo(HttpStatus.FORBIDDEN);
+        verifyNoInteractions(incidentMapper);
+    }
+
+    @Test
+    void shouldGetIncident_AsDispatcher_ReturnAnyIncident() {
+        // Given: incidente automático, sin reportador
+        authenticate("dispatcher@test.com", "DISPATCHER");
+        Incident incident = Incident.builder().id(2L).build();
+        when(incidentRepository.findById(2L)).thenReturn(Optional.of(incident));
+        when(incidentMapper.toResponse(incident)).thenReturn(response());
+
+        // When/Then
+        assertThat(incidentService.getIncident(2L)).isNotNull();
+    }
+
+    @Test
+    void shouldGetIncident_WithUnknownId_ThrowNotFound() {
+        // Given
+        authenticate("admin@test.com", "ADMIN");
+        when(incidentRepository.findById(99L)).thenReturn(Optional.empty());
+
+        // When/Then
+        assertThatThrownBy(() -> incidentService.getIncident(99L))
+                .isInstanceOf(ResourceNotFoundException.class)
+                .hasMessageContaining("99");
+    }
+
+    // ---------- Resolución ----------
+
+    @Test
+    void shouldResolveIncident_WhenOpen_MarkResolvedWithDateAndUser() {
+        // Given
+        authenticate("dispatcher@test.com", "DISPATCHER");
+        User dispatcher = User.builder().id(3L).email("dispatcher@test.com").build();
+        Incident incident = Incident.builder().id(1L).build();
+        when(incidentRepository.findById(1L)).thenReturn(Optional.of(incident));
+        when(userRepository.findByEmail("dispatcher@test.com")).thenReturn(Optional.of(dispatcher));
+        when(incidentRepository.save(incident)).thenReturn(incident);
+        when(incidentMapper.toResponse(incident)).thenReturn(response());
+
+        // When
+        incidentService.resolveIncident(1L);
+
+        // Then
+        assertThat(incident.getStatus()).isEqualTo(Incident.IncidentStatus.RESOLVED);
+        assertThat(incident.getResolvedAt()).isNotNull();
+        assertThat(incident.getResolvedBy()).isSameAs(dispatcher);
+    }
+
+    @Test
+    void shouldResolveIncident_WhenAlreadyResolved_ThrowInvalidStateTransition() {
+        // Given
+        authenticate("admin@test.com", "ADMIN");
+        Incident incident = Incident.builder().id(1L).status(Incident.IncidentStatus.RESOLVED).build();
+        when(incidentRepository.findById(1L)).thenReturn(Optional.of(incident));
+
+        // When/Then
+        assertThatThrownBy(() -> incidentService.resolveIncident(1L))
+                .isInstanceOf(com.web.exception.InvalidStateTransitionException.class)
+                .extracting("status").isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        verify(incidentRepository, never()).save(any());
     }
 }

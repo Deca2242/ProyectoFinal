@@ -2,6 +2,7 @@ package com.web.dto.ticket;
 
 import com.web.dto.baggage.BaggageCreateRequest;
 import com.web.entity.Ticket;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
 
 import java.io.Serializable;
@@ -20,7 +21,7 @@ public record TicketCreateRequest(
         Integer toStopOrder,
         @NotNull BigDecimal price,
         @NotNull Ticket.PaymentMethod paymentMethod,
-        BaggageCreateRequest baggage, // Opcional
+        @Valid BaggageCreateRequest baggage, // Opcional; si viene se valida (peso obligatorio)
         String passengerType // Opcional: "STUDENT", "SENIOR", "CHILD", "ADULT" (default)
 ) implements Serializable {
 }

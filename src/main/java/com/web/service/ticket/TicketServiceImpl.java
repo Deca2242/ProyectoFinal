@@ -1,6 +1,5 @@
 package com.web.service.ticket;
 
-import com.web.dto.baggage.BaggageCreateRequest;
 import com.web.dto.ticket.TicketCancelResponse;
 import com.web.dto.ticket.TicketCreateRequest;
 import com.web.dto.ticket.TicketResponse;
@@ -13,6 +12,7 @@ import com.web.exception.ResourceNotFoundException;
 import com.web.exception.SeatNotAvailableException;
 import com.web.repository.*;
 import com.web.service.admin.ConfigService;
+import com.web.service.baggage.BaggageService;
 import com.web.service.notification.NotificationService;
 import com.web.service.payment.PaymentService;
 import com.web.util.QrCodeGenerator;
@@ -52,6 +52,7 @@ public class TicketServiceImpl implements TicketService {
     private final AssignmentRepository assignmentRepository;
     private final NotificationService notificationService;
     private final PaymentService paymentService;
+    private final BaggageService baggageService;
 
     // Compra un ticket validando disponibilidad, calculando precio con descuentos y generando QR
     @Override
@@ -162,31 +163,9 @@ public class TicketServiceImpl implements TicketService {
         }
         // [Fin pagos]
 
-        // Registrar equipaje si se solicitó, calculando cargo por exceso si supera el límite
+        // Registrar equipaje si se solicitó (peso máximo, cargo por exceso y maletero en BaggageService)
         if (request.baggage() != null) {
-            BaggageCreateRequest baggageReq = request.baggage();
-            
-            Baggage baggage = Baggage.builder()
-                    .ticket(ticket)
-                    .weightKg(baggageReq.weightKg())
-                    .tagCode(qrCodeGenerator.generateBaggageTag())
-                    .build();
-
-            Double baggageWeightLimit = configService.getBaggageWeightLimit();
-            double weightKgDouble = baggageReq.weightKg().doubleValue();
-            if (weightKgDouble > baggageWeightLimit) {
-                double excess = weightKgDouble - baggageWeightLimit;
-                BigDecimal excessFeePerKg = configService.getExcessFeePerKg();
-                BigDecimal excessFee = excessFeePerKg.multiply(BigDecimal.valueOf(excess));
-                baggage.setExcessFee(excessFee.setScale(2, RoundingMode.HALF_UP));
-
-            } else {
-                baggage.setExcessFee(BigDecimal.ZERO);
-            }
-
-            baggage = baggageRepository.save(baggage);
-            ticket.setBaggage(baggage);  // Actualizar relación bidireccional
-
+            baggageService.registerForTicket(ticket, request.baggage());
         }
 
         // Marcar como vendidos los holds del pasajero sobre este asiento y tramo

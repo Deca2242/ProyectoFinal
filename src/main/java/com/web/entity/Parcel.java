@@ -57,8 +57,17 @@ public class Parcel {
     @Builder.Default
     private ParcelStatus status = ParcelStatus.CREATED;
 
-    @Column(name = "delivery_otp", length = 6)
+    // Hash del OTP de entrega (OtpGenerator.hashOtp): el OTP en claro nunca se guarda
+    @Column(name = "delivery_otp", length = 64)
     private String deliveryOtp;
+
+    // Intentos de entrega con OTP incorrecto; al llegar al máximo configurado la encomienda pasa a FAILED
+    @Column(name = "otp_attempts", nullable = false)
+    @Builder.Default
+    private Integer otpAttempts = 0;
+
+    @Column(length = 255)
+    private String description;
 
     @Column(name = "proof_photo_url", length = 255)
     private String proofPhotoUrl;

@@ -11,7 +11,15 @@ public interface IncidentService {
 
     IncidentResponse reportIncident(IncidentCreateRequest request);
 
-    // Filtros opcionales; from/to son fechas inclusivas sobre createdAt
+    // Filtros opcionales; from/to son fechas inclusivas sobre createdAt. reportedBy solo admite "me"
+    // (incidentes del usuario autenticado); CLERK y DRIVER solo pueden consultar los suyos
     List<IncidentResponse> searchIncidents(Incident.IncidentType type, Incident.EntityType entityType,
-                                           Long entityId, LocalDate from, LocalDate to);
+                                           Long entityId, LocalDate from, LocalDate to,
+                                           Incident.IncidentStatus status, String reportedBy);
+
+    // ADMIN y DISPATCHER ven cualquiera; el resto solo los que reportó
+    IncidentResponse getIncident(Long id);
+
+    // OPEN → RESOLVED
+    IncidentResponse resolveIncident(Long id);
 }

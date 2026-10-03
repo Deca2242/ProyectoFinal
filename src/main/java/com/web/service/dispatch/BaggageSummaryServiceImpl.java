@@ -13,6 +13,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 
 // Conteo de equipaje por viaje (etiqueta y conteo por maletero): solo cuenta el de tickets vigentes
 @Service
@@ -46,6 +48,21 @@ public class BaggageSummaryServiceImpl implements BaggageSummaryService {
                 baggage.size(),
                 totalWeight,
                 totalExcessFee,
-                baggageMapper.toResponseList(baggage));
+                baggageMapper.toResponseList(baggage),
+                byCompartment(baggage));
+    }
+
+    // Piezas y peso por maletero, ordenado por nombre de maletero
+    private static Map<String, TripBaggageSummaryResponse.CompartmentSummary> byCompartment(List<Baggage> baggage) {
+        Map<String, TripBaggageSummaryResponse.CompartmentSummary> result = new TreeMap<>();
+        for (Baggage b : baggage) {
+            String compartment = b.getCompartment() == null ? Baggage.DEFAULT_COMPARTMENT : b.getCompartment();
+            result.merge(compartment,
+                    new TripBaggageSummaryResponse.CompartmentSummary(1, b.getWeightKg()),
+                    (current, added) -> new TripBaggageSummaryResponse.CompartmentSummary(
+                            current.pieces() + added.pieces(),
+                            current.totalWeightKg().add(added.totalWeightKg())));
+        }
+        return result;
     }
 }
