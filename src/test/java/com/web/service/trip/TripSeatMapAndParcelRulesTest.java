@@ -18,8 +18,6 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
@@ -39,6 +37,8 @@ class TripSeatMapAndParcelRulesTest {
     private TicketRepository ticketRepository;
     @Mock
     private SeatHoldRepository seatHoldRepository;
+    @Mock
+    private SeatRepository seatRepository;
     @Mock
     private AssignmentRepository assignmentRepository;
     @Mock
@@ -85,11 +85,11 @@ class TripSeatMapAndParcelRulesTest {
                 SeatHold.builder().seatNumber(1).fromStop(stopA).toStop(stopB).build(),
                 SeatHold.builder().seatNumber(2).fromStop(stopB).toStop(stopC).build(),
                 SeatHold.builder().seatNumber(3).build()));
-        when(ticketRepository.isSeatAvailableForSegment(anyLong(), anyInt(), anyInt(), anyInt())).thenReturn(true);
-        when(ticketRepository.isSeatAvailableForSegment(1L, 4, 1, 2)).thenReturn(false);
+        when(ticketRepository.findTicketsBySegment(1L, 1, 2))
+                .thenReturn(List.of(Ticket.builder().seatNumber(4).build()));
 
         // When: se consulta el tramo A -> B
-        List<SeatStatusResponse> seats = tripService.getSeatAvailability(1L, 10L, 11L);
+        List<SeatStatusResponse> seats = tripService.getSeatAvailability(1L, 10L, 11L).seats();
 
         // Then
         assertThat(seats).extracting(SeatStatusResponse::status)

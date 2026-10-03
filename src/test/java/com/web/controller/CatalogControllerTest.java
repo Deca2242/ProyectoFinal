@@ -6,6 +6,8 @@ import com.web.dto.catalog.Route.RouteDetailResponse;
 import com.web.dto.catalog.Route.RouteResponse;
 import com.web.dto.catalog.Route.RouteUpdateRequest;
 import com.web.dto.catalog.Stop.StopCreateRequest;
+import com.web.dto.catalog.Stop.StopResponse;
+import com.web.dto.catalog.Stop.StopUpdateRequest;
 import com.web.config.CustomUserDetailsService;
 import com.web.config.SecurityConfig;
 import com.web.exception.BusinessException;
@@ -66,7 +68,7 @@ class CatalogControllerTest {
                 BigDecimal.valueOf(500.0), 360, true
         ));
 
-        when(routeService.getAllRoutes()).thenReturn(resp);
+        when(routeService.getAllRoutes(false)).thenReturn(resp);
 
         mvc.perform(get("/api/v1/routes")
                         .with(anonymous()))
@@ -82,7 +84,7 @@ class CatalogControllerTest {
                 BigDecimal.valueOf(500.0), 360, true, List.of()
         );
 
-        when(routeService.getRouteById(1L)).thenReturn(resp);
+        when(routeService.getRouteById(1L, false)).thenReturn(resp);
 
         mvc.perform(get("/api/v1/routes/1")
                         .with(anonymous()))
@@ -93,7 +95,7 @@ class CatalogControllerTest {
     // Verifica que retorne 404 cuando la ruta no existe
     @Test
     void getRouteById_shouldReturn404WhenNotFound() throws Exception {
-        when(routeService.getRouteById(99L)).thenThrow(new ResourceNotFoundException("Ruta", 99L));
+        when(routeService.getRouteById(99L, false)).thenThrow(new ResourceNotFoundException("Ruta", 99L));
 
         mvc.perform(get("/api/v1/routes/99")
                         .with(anonymous()))
@@ -108,12 +110,36 @@ class CatalogControllerTest {
                 BigDecimal.valueOf(500.0), 360, true, List.of()
         );
 
-        when(routeService.getRouteById(1L)).thenReturn(resp);
+        when(routeService.getRouteById(1L, false)).thenReturn(resp);
 
         mvc.perform(get("/api/v1/routes/1/stops")
                         .with(anonymous()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value(1));
+    }
+
+    // Verifica que una ruta inactiva sea 404 para el público
+    @Test
+    void getRouteById_inactive_shouldReturn404ForPublic() throws Exception {
+        when(routeService.getRouteById(2L, false)).thenThrow(new ResourceNotFoundException("Ruta", 2L));
+
+        mvc.perform(get("/api/v1/routes/2")
+                        .with(anonymous()))
+                .andExpect(status().isNotFound());
+    }
+
+    // Verifica que includeInactive llegue al servicio (solo tiene efecto para ADMIN)
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void getAllRoutes_withIncludeInactive_shouldPassFlagToService() throws Exception {
+        when(routeService.getAllRoutes(true)).thenReturn(List.of(new RouteResponse(
+                2L, "R002", "Inactiva", "A", "B", BigDecimal.TEN, 60, false)));
+
+        mvc.perform(get("/api/v1/routes").param("includeInactive", "true"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].isActive").value(false));
+
+        verify(routeService).getAllRoutes(true);
     }
 
     // Verifica que un ADMIN pueda crear una nueva ruta
@@ -142,7 +168,7 @@ class CatalogControllerTest {
     @WithMockUser(roles = "ADMIN")
     void updateRoute_shouldReturn200() throws Exception {
         var req = new RouteUpdateRequest(
-                "Bogotá - Cali", BigDecimal.valueOf(600.0), 420, null
+                "Bogotá - Cali", null, null, BigDecimal.valueOf(600.0), 420, null
         );
         var resp = new RouteResponse(
                 1L, "R001", "Bogotá - Cali", "Bogotá", "Cali",
@@ -207,7 +233,7 @@ class CatalogControllerTest {
     // Verifica que la consulta de rutas sea pública sin ningún usuario en el contexto
     @Test
     void getAllRoutes_shouldBePublicWithoutAuthentication() throws Exception {
-        when(routeService.getAllRoutes()).thenReturn(List.of());
+        when(routeService.getAllRoutes(false)).thenReturn(List.of());
 
         mvc.perform(get("/api/v1/routes"))
                 .andExpect(status().isOk())
@@ -227,7 +253,7 @@ class CatalogControllerTest {
     // Verifica que retorne 404 al consultar las paradas de una ruta inexistente
     @Test
     void getRouteWithStops_shouldReturn404WhenNotFound() throws Exception {
-        when(routeService.getRouteById(99L)).thenThrow(new ResourceNotFoundException("Ruta", 99L));
+        when(routeService.getRouteById(99L, false)).thenThrow(new ResourceNotFoundException("Ruta", 99L));
 
         mvc.perform(get("/api/v1/routes/99/stops"))
                 .andExpect(status().isNotFound())
@@ -246,6 +272,38 @@ class CatalogControllerTest {
                 .andExpect(jsonPath("$.validationErrors.code").exists())
                 .andExpect(jsonPath("$.validationErrors.name").exists())
                 .andExpect(jsonPath("$.validationErrors.origin").exists())
+                .andExpect(jsonPath("$.validationErrors.destination").exists())
+                .andExpect(jsonPath("$.validationErrors.distanceKm").exists())
+                .andExpect(jsonPath("$.validationErrors.durationMin").exists());
+
+        verifyNoInteractions(routeService);
+    }
+
+    // Verifica que distancia y duración deban ser positivas al crear una ruta
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void createRoute_shouldReturn400WhenDistanceOrDurationNotPositive() throws Exception {
+        var req = new RouteCreateRequest("R001", "Ruta", "A", "B", BigDecimal.ZERO, -10);
+
+        mvc.perform(post("/api/v1/routes").contentType(MediaType.APPLICATION_JSON)
+                        .content(om.writeValueAsString(req)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.validationErrors.distanceKm").exists())
+                .andExpect(jsonPath("$.validationErrors.durationMin").exists());
+
+        verifyNoInteractions(routeService);
+    }
+
+    // Verifica que la actualización de ruta valide los campos opcionales
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void updateRoute_shouldReturn400WhenFieldsInvalid() throws Exception {
+        var req = new RouteUpdateRequest(" ", null, "", BigDecimal.valueOf(-1), 0, null);
+
+        mvc.perform(put("/api/v1/routes/1").contentType(MediaType.APPLICATION_JSON)
+                        .content(om.writeValueAsString(req)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.validationErrors.name").exists())
                 .andExpect(jsonPath("$.validationErrors.destination").exists())
                 .andExpect(jsonPath("$.validationErrors.distanceKm").exists())
                 .andExpect(jsonPath("$.validationErrors.durationMin").exists());
@@ -313,7 +371,7 @@ class CatalogControllerTest {
     @Test
     @WithMockUser(roles = "ADMIN")
     void updateRoute_shouldReturn404WhenNotFound() throws Exception {
-        var req = new RouteUpdateRequest("Bogotá - Cali", null, null, null);
+        var req = new RouteUpdateRequest("Bogotá - Cali", null, null, null, null, null);
 
         when(routeService.updateRoute(99L, req)).thenThrow(new ResourceNotFoundException("Ruta", 99L));
 
@@ -326,7 +384,7 @@ class CatalogControllerTest {
     @Test
     @WithMockUser(roles = "DISPATCHER")
     void updateRoute_shouldReturn403WhenNotAdmin() throws Exception {
-        var req = new RouteUpdateRequest("Bogotá - Cali", null, null, null);
+        var req = new RouteUpdateRequest("Bogotá - Cali", null, null, null, null, null);
 
         mvc.perform(put("/api/v1/routes/1").contentType(MediaType.APPLICATION_JSON)
                         .content(om.writeValueAsString(req)))
@@ -338,7 +396,7 @@ class CatalogControllerTest {
     // Verifica que actualizar una ruta sin autenticación devuelva 401
     @Test
     void updateRoute_shouldReturn401WhenNotAuthenticated() throws Exception {
-        var req = new RouteUpdateRequest("Bogotá - Cali", null, null, null);
+        var req = new RouteUpdateRequest("Bogotá - Cali", null, null, null, null, null);
 
         mvc.perform(put("/api/v1/routes/1").contentType(MediaType.APPLICATION_JSON)
                         .content(om.writeValueAsString(req)))
@@ -355,15 +413,15 @@ class CatalogControllerTest {
         verify(routeService).deleteRoute(5L);
     }
 
-    // Verifica que eliminar una ruta con viajes programados devuelva 400
+    // Verifica que eliminar una ruta con viajes programados devuelva 409
     @Test
     @WithMockUser(roles = "ADMIN")
-    void deleteRoute_shouldReturn400WhenRouteHasTrips() throws Exception {
+    void deleteRoute_shouldReturn409WhenRouteHasTrips() throws Exception {
         doThrow(new BusinessException("No se puede eliminar la ruta porque tiene viajes programados",
-                HttpStatus.BAD_REQUEST, "ROUTE_HAS_TRIPS")).when(routeService).deleteRoute(1L);
+                HttpStatus.CONFLICT, "ROUTE_HAS_TRIPS")).when(routeService).deleteRoute(1L);
 
         mvc.perform(delete("/api/v1/routes/1"))
-                .andExpect(status().isBadRequest())
+                .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.message").value("No se puede eliminar la ruta porque tiene viajes programados"));
     }
 
@@ -403,9 +461,80 @@ class CatalogControllerTest {
         mvc.perform(post("/api/v1/routes/1/stops").contentType(MediaType.APPLICATION_JSON)
                         .content(om.writeValueAsString(req)))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.validationErrors.routeId").exists())
+                .andExpect(jsonPath("$.validationErrors.routeId").doesNotExist())
                 .andExpect(jsonPath("$.validationErrors.name").exists())
                 .andExpect(jsonPath("$.validationErrors.order").exists());
+
+        verifyNoInteractions(routeService);
+    }
+
+    // Verifica que el orden de una parada empiece en 1
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void addStop_shouldReturn400WhenOrderZero() throws Exception {
+        var req = new StopCreateRequest(1L, "Pereira", 0, null, null);
+
+        mvc.perform(post("/api/v1/routes/1/stops").contentType(MediaType.APPLICATION_JSON)
+                        .content(om.writeValueAsString(req)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.validationErrors.order").exists());
+
+        verifyNoInteractions(routeService);
+    }
+
+    // Verifica que un orden no contiguo devuelva 400
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void addStop_shouldReturn400WhenOrderNotContiguous() throws Exception {
+        var req = new StopCreateRequest(null, "Pereira", 7, null, null);
+        when(routeService.addStop(1L, req)).thenThrow(new BusinessException(
+                "El orden de la nueva parada debe ser 3", HttpStatus.BAD_REQUEST, "STOP_ORDER_NOT_CONTIGUOUS"));
+
+        mvc.perform(post("/api/v1/routes/1/stops").contentType(MediaType.APPLICATION_JSON)
+                        .content(om.writeValueAsString(req)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("El orden de la nueva parada debe ser 3"));
+    }
+
+    // PUT /routes/{routeId}/stops/{stopId}
+
+    // Verifica que un ADMIN pueda actualizar nombre y coordenadas de una parada
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void updateStop_shouldReturn200() throws Exception {
+        var req = new StopUpdateRequest("Honda Centro", new BigDecimal("5.2"), new BigDecimal("-74.7"));
+        when(routeService.updateStop(1L, 5L, req)).thenReturn(
+                new StopResponse(5L, "Honda Centro", 2, new BigDecimal("5.2"), new BigDecimal("-74.7")));
+
+        mvc.perform(put("/api/v1/routes/1/stops/5").contentType(MediaType.APPLICATION_JSON)
+                        .content(om.writeValueAsString(req)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.name").value("Honda Centro"))
+                .andExpect(jsonPath("$.order").value(2));
+    }
+
+    // Verifica que coordenadas fuera de rango devuelvan 400
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void updateStop_shouldReturn400WhenCoordinatesOutOfRange() throws Exception {
+        var req = new StopUpdateRequest(null, new BigDecimal("95"), new BigDecimal("-200"));
+
+        mvc.perform(put("/api/v1/routes/1/stops/5").contentType(MediaType.APPLICATION_JSON)
+                        .content(om.writeValueAsString(req)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.validationErrors.latitude").exists())
+                .andExpect(jsonPath("$.validationErrors.longitude").exists());
+
+        verifyNoInteractions(routeService);
+    }
+
+    // Verifica que un DISPATCHER no pueda actualizar paradas
+    @Test
+    @WithMockUser(roles = "DISPATCHER")
+    void updateStop_shouldReturn403WhenNotAdmin() throws Exception {
+        mvc.perform(put("/api/v1/routes/1/stops/5").contentType(MediaType.APPLICATION_JSON)
+                        .content(om.writeValueAsString(new StopUpdateRequest("X", null, null))))
+                .andExpect(status().isForbidden());
 
         verifyNoInteractions(routeService);
     }

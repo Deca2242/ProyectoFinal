@@ -5,6 +5,8 @@ import com.web.dto.catalog.Route.RouteDetailResponse;
 import com.web.dto.catalog.Route.RouteResponse;
 import com.web.dto.catalog.Route.RouteUpdateRequest;
 import com.web.dto.catalog.Stop.StopCreateRequest;
+import com.web.dto.catalog.Stop.StopResponse;
+import com.web.dto.catalog.Stop.StopUpdateRequest;
 import com.web.service.catalog.RouteService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -23,22 +25,27 @@ public class CatalogController {
 
     private final RouteService routeService;
 
-    // Obtiene todas las rutas disponibles
+    // Obtiene las rutas activas (un ADMIN puede incluir las inactivas con includeInactive=true)
     @GetMapping
-    public ResponseEntity<List<RouteResponse>> getAllRoutes() {
-        return ResponseEntity.ok(routeService.getAllRoutes());
+    public ResponseEntity<List<RouteResponse>> getAllRoutes(
+            @RequestParam(defaultValue = "false") boolean includeInactive) {
+        return ResponseEntity.ok(routeService.getAllRoutes(includeInactive));
     }
 
-    // Obtiene una ruta por su ID con todos sus detalles
+    // Obtiene una ruta por su ID con todos sus detalles (404 si está inactiva, salvo ADMIN con includeInactive)
     @GetMapping("/{id}")
-    public ResponseEntity<RouteDetailResponse> getRouteById(@PathVariable Long id) {
-        return ResponseEntity.ok(routeService.getRouteById(id));
+    public ResponseEntity<RouteDetailResponse> getRouteById(
+            @PathVariable Long id,
+            @RequestParam(defaultValue = "false") boolean includeInactive) {
+        return ResponseEntity.ok(routeService.getRouteById(id, includeInactive));
     }
 
-    // Obtiene una ruta con todas sus paradas
+    // Obtiene una ruta con todas sus paradas (mismas reglas de visibilidad que getRouteById)
     @GetMapping("/{id}/stops")
-    public ResponseEntity<RouteDetailResponse> getRouteWithStops(@PathVariable Long id) {
-        return ResponseEntity.ok(routeService.getRouteById(id));
+    public ResponseEntity<RouteDetailResponse> getRouteWithStops(
+            @PathVariable Long id,
+            @RequestParam(defaultValue = "false") boolean includeInactive) {
+        return ResponseEntity.ok(routeService.getRouteById(id, includeInactive));
     }
 
 
@@ -76,6 +83,16 @@ public class CatalogController {
             @Valid @RequestBody StopCreateRequest request) {
         RouteDetailResponse response = routeService.addStop(routeId, request);
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
+    }
+
+    // Actualiza nombre y coordenadas de una parada
+    @PutMapping("/{routeId}/stops/{stopId}")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<StopResponse> updateStop(
+            @PathVariable Long routeId,
+            @PathVariable Long stopId,
+            @Valid @RequestBody StopUpdateRequest request) {
+        return ResponseEntity.ok(routeService.updateStop(routeId, stopId, request));
     }
 
     // Elimina una parada de una ruta

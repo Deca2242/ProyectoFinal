@@ -131,7 +131,7 @@ class TripCreationAndDriverRulesTest {
         // When/Then
         assertThatThrownBy(() -> tripService.createTrip(validRequest()))
                 .satisfies(ex -> assertBusinessError(ex, HttpStatus.BAD_REQUEST, "ROUTE_INACTIVE"));
-        verify(tripRepository, never()).findBusIdsWithTripsOnDate(any());
+        verify(tripRepository, never()).existsOverlappingTripForBus(any(), any(), any(), any());
         verify(tripRepository, never()).save(any());
         verifyNoInteractions(tripMapper);
     }
@@ -143,7 +143,6 @@ class TripCreationAndDriverRulesTest {
         givenRouteAndBus();
         TripCreateRequest request = validRequest();
         TripResponse response = mock(TripResponse.class);
-        when(tripRepository.findBusIdsWithTripsOnDate(TRIP_DATE)).thenReturn(List.of());
         when(tripMapper.toEntity(request)).thenReturn(trip);
         when(tripRepository.save(trip)).thenReturn(trip);
         when(tripMapper.toResponse(trip)).thenReturn(response);
@@ -180,7 +179,7 @@ class TripCreationAndDriverRulesTest {
         // When/Then
         assertThatThrownBy(() -> tripService.createTrip(request))
                 .satisfies(ex -> assertBusinessError(ex, HttpStatus.BAD_REQUEST, "INVALID_DATES"));
-        verify(tripRepository, never()).findBusIdsWithTripsOnDate(any());
+        verify(tripRepository, never()).existsOverlappingTripForBus(any(), any(), any(), any());
         verify(tripRepository, never()).save(any());
     }
 
@@ -190,7 +189,6 @@ class TripCreationAndDriverRulesTest {
         givenRouteAndBus();
         TripCreateRequest request = new TripCreateRequest(1L, 1L, TRIP_DATE,
                 TRIP_DATE.atTime(22, 0), TRIP_DATE.plusDays(1).atTime(4, 0));
-        when(tripRepository.findBusIdsWithTripsOnDate(TRIP_DATE)).thenReturn(List.of());
         when(tripMapper.toEntity(request)).thenReturn(trip);
         when(tripRepository.save(trip)).thenReturn(trip);
         when(tripMapper.toResponse(trip)).thenReturn(mock(TripResponse.class));
@@ -203,10 +201,11 @@ class TripCreationAndDriverRulesTest {
     }
 
     @Test
-    void shouldCreateTrip_WithBusAlreadyScheduledThatDay_ThrowConflictBusBusy() {
-        // Given
+    void shouldCreateTrip_WithOverlappingHours_ThrowBusBusy() {
+        // Given: el bus tiene otro viaje activo que se solapa con 08:00-12:00
         givenRouteAndBus();
-        when(tripRepository.findBusIdsWithTripsOnDate(TRIP_DATE)).thenReturn(List.of(3L, 1L));
+        when(tripRepository.existsOverlappingTripForBus(1L, TRIP_DATE.atTime(8, 0), TRIP_DATE.atTime(12, 0), null))
+                .thenReturn(true);
 
         // When/Then
         assertThatThrownBy(() -> tripService.createTrip(validRequest()))
@@ -216,11 +215,13 @@ class TripCreationAndDriverRulesTest {
     }
 
     @Test
-    void shouldCreateTrip_WithOtherBusesBusy_CreateTrip() {
-        // Given
+    void shouldCreateTrip_WithBusArrivedEarlierSameDay_AllowSecondTrip() {
+        // Given: el bus hizo un viaje en la mañana del mismo día que no se solapa con 08:00-12:00
+        // (la comprobación es por franja horaria, no por día)
         givenRouteAndBus();
         TripCreateRequest request = validRequest();
-        when(tripRepository.findBusIdsWithTripsOnDate(TRIP_DATE)).thenReturn(List.of(2L, 3L));
+        when(tripRepository.existsOverlappingTripForBus(1L, TRIP_DATE.atTime(8, 0), TRIP_DATE.atTime(12, 0), null))
+                .thenReturn(false);
         when(tripMapper.toEntity(request)).thenReturn(trip);
         when(tripRepository.save(trip)).thenReturn(trip);
         when(tripMapper.toResponse(trip)).thenReturn(mock(TripResponse.class));
@@ -230,6 +231,53 @@ class TripCreationAndDriverRulesTest {
 
         // Then
         verify(tripRepository).save(argThat(t -> t.getRoute() == route && t.getBus() == bus));
+        verify(tripRepository, never()).findBusIdsWithTripsOnDate(any());
+    }
+
+    @Test
+    void shouldCreateTrip_WithDepartureInThePast_ThrowInvalidDates() {
+        // Given: salida hace una hora
+        givenRouteAndBus();
+        LocalDateTime departure = LocalDateTime.now().minusHours(1);
+        TripCreateRequest request = new TripCreateRequest(1L, 1L, departure.toLocalDate(),
+                departure, departure.plusHours(4));
+
+        // When/Then
+        assertThatThrownBy(() -> tripService.createTrip(request))
+                .satisfies(ex -> assertBusinessError(ex, HttpStatus.BAD_REQUEST, "INVALID_DATES"));
+        verify(tripRepository, never()).existsOverlappingTripForBus(any(), any(), any(), any());
+        verify(tripRepository, never()).save(any());
+    }
+
+    @Test
+    void shouldCreateTrip_WithoutArrivalEta_ComputeFromRouteDuration() {
+        // Given: ruta de 150 minutos y petición sin llegada
+        route.setDurationMin(150);
+        givenRouteAndBus();
+        TripCreateRequest request = new TripCreateRequest(1L, 1L, TRIP_DATE, TRIP_DATE.atTime(8, 0), null);
+        Trip mapped = Trip.builder().tripDate(TRIP_DATE).departureTime(TRIP_DATE.atTime(8, 0)).build();
+        when(tripMapper.toEntity(request)).thenReturn(mapped);
+        when(tripRepository.save(mapped)).thenReturn(mapped);
+        when(tripMapper.toResponse(mapped)).thenReturn(mock(TripResponse.class));
+
+        // When
+        tripService.createTrip(request);
+
+        // Then: llegada = salida + duración, y el solapamiento se valida con esa franja
+        assertThat(mapped.getArrivalEta()).isEqualTo(TRIP_DATE.atTime(10, 30));
+        verify(tripRepository).existsOverlappingTripForBus(1L, TRIP_DATE.atTime(8, 0), TRIP_DATE.atTime(10, 30), null);
+    }
+
+    @Test
+    void shouldCreateTrip_WithoutArrivalEtaAndRouteWithoutDuration_ThrowInvalidDates() {
+        // Given
+        givenRouteAndBus();
+        TripCreateRequest request = new TripCreateRequest(1L, 1L, TRIP_DATE, TRIP_DATE.atTime(8, 0), null);
+
+        // When/Then
+        assertThatThrownBy(() -> tripService.createTrip(request))
+                .satisfies(ex -> assertBusinessError(ex, HttpStatus.BAD_REQUEST, "INVALID_DATES"));
+        verify(tripRepository, never()).save(any());
     }
 
     // ---------- Reembolso al cancelar ----------

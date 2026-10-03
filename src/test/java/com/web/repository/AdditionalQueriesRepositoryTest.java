@@ -311,16 +311,17 @@ class AdditionalQueriesRepositoryTest extends BaseRepositoryTest {
     // ---------- TripRepository ----------
 
     @Test
-    @DisplayName("countByRouteIdAndTripDateGreaterThanEqual incluye los viajes de hoy y excluye los pasados")
-    void trip_countByRouteIdAndTripDateGreaterThanEqual() {
+    @DisplayName("countPendingTripsByRoute: solo cuenta viajes SCHEDULED/BOARDING con salida futura")
+    void trip_countPendingTripsByRoute() {
         LocalDate today = LocalDate.now();
-        persistTrip(today);
         persistTrip(today.minusDays(3));
+        Trip cancelled = persistTrip(today.plusDays(4));
+        cancelled.setStatus(Trip.TripStatus.CANCELLED);
         em.flush();
 
-        // Viaje de hoy + viaje del setUp (en 2 días)
-        assertThat(tripRepository.countByRouteIdAndTripDateGreaterThanEqual(route.getId(), today)).isEqualTo(2L);
-        assertThat(tripRepository.countByRouteIdAndTripDateGreaterThanEqual(route.getId(), today.plusDays(3))).isZero();
+        // Solo el viaje del setUp (en 2 días) sigue pendiente
+        assertThat(tripRepository.countPendingTripsByRoute(route.getId(), LocalDateTime.now())).isEqualTo(1L);
+        assertThat(tripRepository.countPendingTripsByRoute(route.getId(), LocalDateTime.now().plusDays(10))).isZero();
     }
 
     // ---------- RouteRepository / StopRepository ----------
@@ -388,7 +389,7 @@ class AdditionalQueriesRepositoryTest extends BaseRepositoryTest {
     // ---------- TripRepository ----------
 
     @Test
-    @DisplayName("findBusIdsWithTripsOnDate: buses con viajes no cancelados en la fecha")
+    @DisplayName("findBusIdsWithTripsOnDate: buses con viajes no cancelados ni llegados en la fecha")
     void trip_findBusIdsWithTripsOnDate() {
         Bus otherBus = em.persist(Bus.builder()
                 .plate("OTR456")
@@ -399,6 +400,16 @@ class AdditionalQueriesRepositoryTest extends BaseRepositoryTest {
         Trip cancelled = persistTrip(tripDate);
         cancelled.setBus(otherBus);
         cancelled.setStatus(Trip.TripStatus.CANCELLED);
+        // Un viaje que ya llegó tampoco ocupa el bus
+        Bus arrivedBus = em.persist(Bus.builder()
+                .plate("LLG789")
+                .capacity(40)
+                .amenities(new HashMap<>())
+                .status(Bus.BusStatus.ACTIVE)
+                .build());
+        Trip arrived = persistTrip(tripDate);
+        arrived.setBus(arrivedBus);
+        arrived.setStatus(Trip.TripStatus.ARRIVED);
         em.flush();
 
         assertThat(tripRepository.findBusIdsWithTripsOnDate(tripDate)).containsExactly(bus.getId());

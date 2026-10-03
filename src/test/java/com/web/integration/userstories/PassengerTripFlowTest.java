@@ -9,6 +9,7 @@ import com.web.dto.ticket.TicketCreateRequest;
 import com.web.dto.ticket.TicketResponse;
 import com.web.dto.ticket.reservations.SeatHoldRequest;
 import com.web.dto.ticket.reservations.SeatHoldResponse;
+import com.web.dto.trip.SeatAvailabilityResponse;
 import com.web.dto.trip.SeatStatusResponse;
 import com.web.dto.trip.TripResponse;
 import com.web.entity.SeatHold;
@@ -81,16 +82,16 @@ class PassengerTripFlowTest {
                 1L, 1L, "Bogotá - Medellín", "Bogotá", "Medellín",
                 1L, "ABC123", 40,
                 LocalDate.now().plusDays(1), LocalDateTime.now().plusDays(1).plusHours(8), null,
-                com.web.entity.Trip.TripStatus.SCHEDULED, 25, 62.5
+                com.web.entity.Trip.TripStatus.SCHEDULED, 25, 62.5, null, null, null, null
         );
         var trip2 = new TripResponse(
                 2L, 1L, "Bogotá - Medellín", "Bogotá", "Medellín",
                 2L, "XYZ789", 45,
                 LocalDate.now().plusDays(1), LocalDateTime.now().plusDays(1).plusHours(10), null,
-                com.web.entity.Trip.TripStatus.SCHEDULED, 30, 66.7
+                com.web.entity.Trip.TripStatus.SCHEDULED, 30, 66.7, null, null, null, null
         );
 
-        when(tripService.searchTrips(1L, LocalDate.now().plusDays(1)))
+        when(tripService.searchTrips(1L, LocalDate.now().plusDays(1), false))
                 .thenReturn(List.of(trip1, trip2));
 
         // When & Then
@@ -112,25 +113,27 @@ class PassengerTripFlowTest {
         // Este endpoint es público, no requiere autenticación
         // Given: Asientos disponibles para un tramo específico
         var seats = List.of(
-                new SeatStatusResponse(1, true, "AVAILABLE"),
-                new SeatStatusResponse(2, false, "OCCUPIED"),
-                new SeatStatusResponse(3, true, "AVAILABLE"),
-                new SeatStatusResponse(4, true, "AVAILABLE")
+                new SeatStatusResponse(1, true, "AVAILABLE", "STANDARD"),
+                new SeatStatusResponse(2, false, "OCCUPIED", "STANDARD"),
+                new SeatStatusResponse(3, true, "AVAILABLE", "STANDARD"),
+                new SeatStatusResponse(4, true, "AVAILABLE", "STANDARD")
         );
 
-        when(tripService.getSeatAvailability(1L, 1L, 2L)).thenReturn(seats);
+        when(tripService.getSeatAvailability(1L, 1L, 2L))
+                .thenReturn(new SeatAvailabilityResponse(1L, 1L, 2L, 4, 3, seats));
 
         // When & Then
         mvc.perform(get("/api/v1/trips/1/seats")
                         .param("fromStopId", "1")
                         .param("toStopId", "2"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$[0].seatNumber").value(1))
-                .andExpect(jsonPath("$[0].available").value(true))
-                .andExpect(jsonPath("$[1].seatNumber").value(2))
-                .andExpect(jsonPath("$[1].available").value(false))
-                .andExpect(jsonPath("$[2].seatNumber").value(3))
-                .andExpect(jsonPath("$[2].available").value(true));
+                .andExpect(jsonPath("$.availableSeats").value(3))
+                .andExpect(jsonPath("$.seats[0].seatNumber").value(1))
+                .andExpect(jsonPath("$.seats[0].available").value(true))
+                .andExpect(jsonPath("$.seats[1].seatNumber").value(2))
+                .andExpect(jsonPath("$.seats[1].available").value(false))
+                .andExpect(jsonPath("$.seats[2].seatNumber").value(3))
+                .andExpect(jsonPath("$.seats[2].available").value(true));
     }
 
     // Verifica que un pasajero reserve un asiento por 10 minutos

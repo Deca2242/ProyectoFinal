@@ -34,8 +34,6 @@ public interface RouteMapper {
     // Update parcial
     @Mapping(target = "id", ignore = true)
     @Mapping(target = "code", ignore = true)
-    @Mapping(target = "origin", ignore = true)
-    @Mapping(target = "destination", ignore = true)
     @Mapping(target = "createdAt", ignore = true)
     @Mapping(target = "stops", ignore = true)
     @Mapping(target = "trips", ignore = true)

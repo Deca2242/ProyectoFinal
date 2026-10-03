@@ -8,11 +8,13 @@ import com.web.dto.trip.TripResponse;
 import com.web.dto.trip.TripUpdateRequest;
 import com.web.dto.trip.SeatAvailabilityResponse;
 import com.web.dto.trip.SeatStatusResponse;
+import com.web.dto.trip.SegmentOccupancyResponse;
 import com.web.dto.trip.mapper.TripMapper;
 import com.web.entity.Bus;
 import com.web.entity.Incident;
 import com.web.entity.Parcel;
 import com.web.entity.Route;
+import com.web.entity.Seat;
 import com.web.entity.SeatHold;
 import com.web.entity.Stop;
 import com.web.entity.Ticket;
@@ -26,6 +28,7 @@ import com.web.repository.IncidentRepository;
 import com.web.repository.ParcelRepository;
 import com.web.repository.RouteRepository;
 import com.web.repository.SeatHoldRepository;
+import com.web.repository.SeatRepository;
 import com.web.repository.StopRepository;
 import com.web.repository.TicketRepository;
 import com.web.repository.TripRepository;
@@ -41,6 +44,9 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -52,6 +58,7 @@ public class TripServiceImpl implements TripService {
         private final StopRepository stopRepository;
         private final TicketRepository ticketRepository;
         private final SeatHoldRepository seatHoldRepository;
+        private final SeatRepository seatRepository;
         private final AssignmentRepository assignmentRepository;
         private final ParcelRepository parcelRepository;
         private final IncidentRepository incidentRepository;
@@ -79,15 +86,31 @@ public class TripServiceImpl implements TripService {
                                         "ROUTE_INACTIVE");
                 }
 
-                if (!request.departureTime().toLocalDate().equals(request.tripDate())
-                                || !request.arrivalEta().isAfter(request.departureTime())) {
+                LocalDateTime departure = request.departureTime();
+                if (!departure.isAfter(LocalDateTime.now())) {
+                        throw new BusinessException("La salida del viaje debe ser posterior al momento actual",
+                                        HttpStatus.BAD_REQUEST, "INVALID_DATES");
+                }
+
+                // Sin llegada estimada se calcula con la duración de la ruta
+                LocalDateTime arrival = request.arrivalEta();
+                if (arrival == null) {
+                        if (route.getDurationMin() == null) {
+                                throw new BusinessException("Debe indicar la llegada estimada: la ruta no tiene duración",
+                                                HttpStatus.BAD_REQUEST, "INVALID_DATES");
+                        }
+                        arrival = departure.plusMinutes(route.getDurationMin());
+                }
+
+                if (!departure.toLocalDate().equals(request.tripDate()) || !arrival.isAfter(departure)) {
                         throw new BusinessException(
                                         "La fecha del viaje debe coincidir con la salida y la llegada debe ser posterior a la salida",
                                         HttpStatus.BAD_REQUEST, "INVALID_DATES");
                 }
 
-                if (tripRepository.findBusIdsWithTripsOnDate(request.tripDate()).contains(bus.getId())) {
-                        throw new BusinessException("El bus ya tiene un viaje programado ese día",
+                // El bus puede hacer varios viajes el mismo día mientras las franjas horarias no se solapen
+                if (tripRepository.existsOverlappingTripForBus(bus.getId(), departure, arrival, null)) {
+                        throw new BusinessException("El bus ya tiene otro viaje que se solapa con ese horario",
                                         HttpStatus.CONFLICT, "BUS_BUSY");
                 }
 
@@ -95,32 +118,20 @@ public class TripServiceImpl implements TripService {
                 // Establecer las relaciones manualmente
                 trip.setRoute(route);
                 trip.setBus(bus);
+                trip.setArrivalEta(arrival);
 
                 Trip savedTrip = tripRepository.save(trip);
 
                 return tripMapper.toResponse(savedTrip);
         }
 
-        // Busca viajes por ruta y/o fecha (filtros opcionales)
+        // Busca salidas por ruta y/o fecha (filtros opcionales). Por defecto solo las reservables
+        // (SCHEDULED/BOARDING con salida futura); ADMIN y DISPATCHER pueden pedir todas con includeAll
         @Override
         @Transactional(readOnly = true)
-        public List<TripResponse> searchTrips(Long routeId, LocalDate date) {
-                List<Trip> trips;
-
-                if (routeId != null && date != null) {
-                        trips = tripRepository.findByRouteIdAndTripDate(routeId, date);
-                } else if (routeId != null) {
-                        trips = tripRepository.findAll().stream()
-                                        .filter(t -> t.getRoute().getId().equals(routeId))
-                                        .toList();
-                } else if (date != null) {
-                        trips = tripRepository.findAll().stream()
-                                        .filter(t -> t.getTripDate().equals(date))
-                                        .toList();
-                } else {
-                        trips = tripRepository.findAll();
-                }
-
+        public List<TripResponse> searchTrips(Long routeId, LocalDate date, boolean includeAll) {
+                boolean all = includeAll && (SecurityUtils.hasRole("ADMIN") || SecurityUtils.hasRole("DISPATCHER"));
+                List<Trip> trips = tripRepository.searchTrips(routeId, date, all, LocalDateTime.now());
                 return tripMapper.toResponseList(trips);
         }
 
@@ -131,31 +142,24 @@ public class TripServiceImpl implements TripService {
                 Trip trip = tripRepository.findByIdWithDetails(id)
                                 .orElseThrow(() -> new ResourceNotFoundException("Viaje", id));
 
-                // Mapear la entidad a DTO básico
+                // El mapper ya calcula sillas vendidas, disponibles y ocupación
                 TripDetailResponse basicResponse = tripMapper.toDetailResponse(trip);
 
-                // Calcular los campos que faltan
-                Long soldSeatsCount = ticketRepository.countSoldSeats(trip.getId());
-                Integer capacity = trip.getBus().getCapacity();
+                // Números de silla disponibles para el viaje completo: sin ticket SOLD en ningún tramo.
+                // Una silla vendida solo en un tramo no aparece aquí; el mapa por tramo es GET /trips/{id}/seats
+                Set<Integer> soldSeatNumbers = ticketRepository.findByTripIdAndStatus(trip.getId(), Ticket.TicketStatus.SOLD)
+                                .stream()
+                                .map(Ticket::getSeatNumber)
+                                .collect(Collectors.toSet());
                 // Sillas vendibles: las físicas más las de overbooking aprobadas por el DISPATCHER
-                int sellableSeats = capacity + approvedOverbookingSeats(trip);
-                Integer availableSeatsCount = Math.max(0, sellableSeats - soldSeatsCount.intValue());
-                Double occupancy = capacity > 0 ? (soldSeatsCount.doubleValue() / capacity) * 100.0 : 0.0;
-
-                // Calcular números de asientos disponibles
+                int sellableSeats = trip.getBus().getCapacity() + approvedOverbookingSeats(trip);
                 List<Integer> availableSeatNumbers = new ArrayList<>();
                 for (int seatNum = 1; seatNum <= sellableSeats; seatNum++) {
-                        // Verificar si el asiento está vendido para cualquier tramo del viaje
-                        boolean isSold = ticketRepository.existsByTripIdAndSeatNumberAndStatus(
-                                        trip.getId(),
-                                        seatNum,
-                                        Ticket.TicketStatus.SOLD);
-                        if (!isSold) {
+                        if (!soldSeatNumbers.contains(seatNum)) {
                                 availableSeatNumbers.add(seatNum);
                         }
                 }
 
-                // Crear el response completo con todos los campos calculados
                 return new TripDetailResponse(
                                 basicResponse.id(),
                                 basicResponse.route(),
@@ -165,63 +169,90 @@ public class TripServiceImpl implements TripService {
                                 basicResponse.arrivalEta(),
                                 basicResponse.status(),
                                 basicResponse.assignment(),
-                                soldSeatsCount.intValue(),
-                                availableSeatsCount,
-                                occupancy,
-                                availableSeatNumbers);
+                                basicResponse.soldSeats(),
+                                basicResponse.availableSeats(),
+                                basicResponse.occupancyPercentage(),
+                                availableSeatNumbers,
+                                basicResponse.platform(),
+                                basicResponse.departedAt(),
+                                basicResponse.arrivedAt());
         }
 
-        // Obtiene el estado de disponibilidad de todos los asientos para un tramo
-        // específico
+        // Mapa de sillas para un tramo: una consulta de tickets y otra de holds solapados, resueltas en memoria
         @Override
         @Transactional(readOnly = true)
-        public List<SeatStatusResponse> getSeatAvailability(Long tripId, Long fromStopId, Long toStopId) {
+        public SeatAvailabilityResponse getSeatAvailability(Long tripId, Long fromStopId, Long toStopId) {
                 Trip trip = tripRepository.findById(tripId)
                                 .orElseThrow(() -> new ResourceNotFoundException("Viaje", tripId));
 
-                Stop fromStop = stopRepository.findById(fromStopId)
-                                .orElseThrow(() -> new ResourceNotFoundException("Parada origen", fromStopId));
-
-                Stop toStop = stopRepository.findById(toStopId)
-                                .orElseThrow(() -> new ResourceNotFoundException("Parada destino", toStopId));
-
-                if (!fromStop.getRoute().getId().equals(trip.getRoute().getId()) ||
-                                !toStop.getRoute().getId().equals(trip.getRoute().getId())) {
-                        throw new BusinessException("Las paradas no pertenecen a la ruta del viaje",
-                                        HttpStatus.BAD_REQUEST,
-                                        "INVALID_STOPS");
+                // Un viaje cancelado o que ya llegó no admite ventas: no tiene mapa de sillas
+                if (trip.getStatus() == Trip.TripStatus.CANCELLED || trip.getStatus() == Trip.TripStatus.ARRIVED) {
+                        throw new InvalidStateTransitionException(
+                                        "No hay mapa de sillas para un viaje en estado " + trip.getStatus());
                 }
 
-                if (fromStop.getOrder() >= toStop.getOrder()) {
-                        throw new BusinessException("La parada de origen debe ser anterior a la de destino",
-                                        HttpStatus.BAD_REQUEST,
-                                        "INVALID_SEGMENT");
-                }
+                Stop[] segment = validateSegment(trip, fromStopId, toStopId);
+                int fromStopOrder = segment[0].getOrder();
+                int toStopOrder = segment[1].getOrder();
 
-                Integer capacity = trip.getBus().getCapacity();
-                List<SeatStatusResponse> seatStatuses = new ArrayList<>();
-
-                // Obtener los órdenes de las paradas
-                Integer fromStopOrder = fromStop.getOrder();
-                Integer toStopOrder = toStop.getOrder();
+                // Sillas vendidas en un tramo que se solapa con el pedido
+                Set<Integer> occupiedSeats = ticketRepository.findTicketsBySegment(tripId, fromStopOrder, toStopOrder)
+                                .stream()
+                                .map(Ticket::getSeatNumber)
+                                .collect(Collectors.toSet());
 
                 // Holds activos que se solapan con el tramo: la silla se muestra HELD (no disponible)
-                List<SeatHold> activeHolds = seatHoldRepository.findActiveHoldsByTrip(tripId, LocalDateTime.now());
+                Set<Integer> heldSeats = seatHoldRepository.findActiveHoldsByTrip(tripId, LocalDateTime.now())
+                                .stream()
+                                .filter(h -> holdOverlaps(h, fromStopOrder, toStopOrder))
+                                .map(SeatHold::getSeatNumber)
+                                .collect(Collectors.toSet());
 
-                int sellableSeats = capacity + approvedOverbookingSeats(trip);
-                for (Integer seatNumber = 1; seatNumber <= sellableSeats; seatNumber++) {
-                        Boolean isAvailable = ticketRepository.isSeatAvailableForSegment(
-                                        tripId, seatNumber, fromStopOrder, toStopOrder);
-                        final int seat = seatNumber;
-                        boolean held = isAvailable && activeHolds.stream()
-                                        .anyMatch(h -> h.getSeatNumber() == seat
-                                                        && holdOverlaps(h, fromStopOrder, toStopOrder));
+                // Tipo de cada silla física; las de overbooking (sin fila en seats) se muestran STANDARD
+                Map<Integer, Seat.SeatType> seatTypes = seatRepository.findByBusIdOrderBySeatNumberAsc(trip.getBus().getId())
+                                .stream()
+                                .collect(Collectors.toMap(Seat::getSeatNumber, Seat::getSeatType, (a, b) -> a));
 
-                        String status = !isAvailable ? "OCCUPIED" : held ? "HELD" : "AVAILABLE";
-                        seatStatuses.add(new SeatStatusResponse(seatNumber, isAvailable && !held, status));
+                int sellableSeats = trip.getBus().getCapacity() + approvedOverbookingSeats(trip);
+                List<SeatStatusResponse> seatStatuses = new ArrayList<>();
+                int availableCount = 0;
+                for (int seatNumber = 1; seatNumber <= sellableSeats; seatNumber++) {
+                        boolean occupied = occupiedSeats.contains(seatNumber);
+                        boolean held = !occupied && heldSeats.contains(seatNumber);
+                        boolean available = !occupied && !held;
+                        if (available) {
+                                availableCount++;
+                        }
+                        String status = occupied ? "OCCUPIED" : held ? "HELD" : "AVAILABLE";
+                        String seatType = seatTypes.getOrDefault(seatNumber, Seat.SeatType.STANDARD).name();
+                        seatStatuses.add(new SeatStatusResponse(seatNumber, available, status, seatType));
                 }
 
-                return seatStatuses;
+                return new SeatAvailabilityResponse(tripId, fromStopId, toStopId, sellableSeats, availableCount,
+                                seatStatuses);
+        }
+
+        // Ocupación en tiempo real por tramos consecutivos Stop[i] → Stop[i+1] de la ruta (panel de despacho)
+        @Override
+        @Transactional(readOnly = true)
+        public List<SegmentOccupancyResponse> getOccupancyBySegment(Long tripId) {
+                Trip trip = tripRepository.findById(tripId)
+                                .orElseThrow(() -> new ResourceNotFoundException("Viaje", tripId));
+
+                List<Stop> stops = stopRepository.findByRouteIdOrderByOrderAsc(trip.getRoute().getId());
+                int capacity = trip.getBus().getCapacity();
+
+                List<SegmentOccupancyResponse> segments = new ArrayList<>();
+                for (int i = 0; i < stops.size() - 1; i++) {
+                        Stop from = stops.get(i);
+                        Stop to = stops.get(i + 1);
+                        Long sold = ticketRepository.countSoldSeatsForSegment(tripId, from.getOrder(), to.getOrder());
+                        int soldSeats = sold == null ? 0 : sold.intValue();
+                        double occupancy = capacity > 0 ? (soldSeats * 100.0) / capacity : 0.0;
+                        segments.add(new SegmentOccupancyResponse(from.getId(), from.getName(), to.getId(), to.getName(),
+                                        soldSeats, capacity, occupancy));
+                }
+                return segments;
         }
 
         // Actualiza el estado de un viaje validando transiciones permitidas
@@ -261,17 +292,12 @@ public class TripServiceImpl implements TripService {
                 Trip trip = tripRepository.findById(id)
                                 .orElseThrow(() -> new ResourceNotFoundException("Viaje", id));
 
-                if (trip.getStatus() == Trip.TripStatus.DEPARTED ||
-                                trip.getStatus() == Trip.TripStatus.ARRIVED) {
-                        throw new BusinessException("No se puede cancelar un viaje que ya partió o llegó",
-                                        HttpStatus.BAD_REQUEST,
-                                        "INVALID_CANCEL");
-                }
-
-                if (trip.getStatus() == Trip.TripStatus.CANCELLED) {
-                        throw new BusinessException("El viaje ya está cancelado",
-                                        HttpStatus.BAD_REQUEST,
-                                        "INVALID_CANCEL");
+                // Un viaje que ya partió, llegó o está cancelado no admite la transición (422)
+                if (trip.getStatus() == Trip.TripStatus.DEPARTED
+                                || trip.getStatus() == Trip.TripStatus.ARRIVED
+                                || trip.getStatus() == Trip.TripStatus.CANCELLED) {
+                        throw new InvalidStateTransitionException(trip.getStatus().name(),
+                                        Trip.TripStatus.CANCELLED.name());
                 }
 
                 releaseTicketsAndHolds(trip);
@@ -338,24 +364,9 @@ public class TripServiceImpl implements TripService {
                         }
                 }
 
-                Stop fromStop = stopRepository.findById(fromStopId)
-                                .orElseThrow(() -> new ResourceNotFoundException("Parada origen", fromStopId));
-
-                Stop toStop = stopRepository.findById(toStopId)
-                                .orElseThrow(() -> new ResourceNotFoundException("Parada destino", toStopId));
-
-                if (!fromStop.getRoute().getId().equals(trip.getRoute().getId()) ||
-                                !toStop.getRoute().getId().equals(trip.getRoute().getId())) {
-                        throw new BusinessException("Las paradas no pertenecen a la ruta del viaje",
-                                        HttpStatus.BAD_REQUEST,
-                                        "INVALID_STOPS");
-                }
-
-                if (fromStop.getOrder() >= toStop.getOrder()) {
-                        throw new BusinessException("La parada de origen debe ser anterior a la de destino",
-                                        HttpStatus.BAD_REQUEST,
-                                        "INVALID_SEGMENT");
-                }
+                Stop[] segment = validateSegment(trip, fromStopId, toStopId);
+                Stop fromStop = segment[0];
+                Stop toStop = segment[1];
 
                 // Todos los pasajeros a bordo en algún punto del tramo, no solo los de origen/destino exactos
                 List<Ticket> tickets = ticketRepository.findTicketsBySegment(tripId, fromStop.getOrder(),
@@ -389,8 +400,9 @@ public class TripServiceImpl implements TripService {
                         throw new BusinessException("La llegada debe ser posterior a la salida",
                                         HttpStatus.BAD_REQUEST, "INVALID_DATES");
                 }
-                if (request.departureTime() != null && !departure.isAfter(LocalDateTime.now())) {
-                        throw new BusinessException("La nueva salida debe ser posterior al momento actual",
+                // Aplica también si solo se cambia el bus o la llegada: un viaje cuya salida ya pasó no se reprograma
+                if (!departure.isAfter(LocalDateTime.now())) {
+                        throw new BusinessException("La salida del viaje debe ser posterior al momento actual",
                                         HttpStatus.BAD_REQUEST, "INVALID_DATES");
                 }
 
@@ -403,13 +415,13 @@ public class TripServiceImpl implements TripService {
                                         "BUS_NOT_AVAILABLE");
                 }
 
-                // Con el mismo bus y el mismo día el único viaje del bus es este; en otro caso el bus debe estar libre
+                // El bus (nuevo o el mismo) no puede tener otro viaje que se solape con la nueva franja
                 LocalDate newDate = departure.toLocalDate();
                 boolean busChanged = !bus.getId().equals(trip.getBus().getId());
-                boolean dateChanged = !newDate.equals(trip.getTripDate());
-                if ((busChanged || dateChanged)
-                                && tripRepository.findBusIdsWithTripsOnDate(newDate).contains(bus.getId())) {
-                        throw new BusinessException("El bus ya tiene un viaje programado ese día",
+                boolean scheduleChanged = !departure.equals(trip.getDepartureTime()) || !arrival.equals(trip.getArrivalEta());
+                if ((busChanged || scheduleChanged)
+                                && tripRepository.existsOverlappingTripForBus(bus.getId(), departure, arrival, trip.getId())) {
+                        throw new BusinessException("El bus ya tiene otro viaje que se solapa con ese horario",
                                         HttpStatus.CONFLICT, "BUS_BUSY");
                 }
 
@@ -426,7 +438,6 @@ public class TripServiceImpl implements TripService {
                 }
 
                 // El conductor asignado debe seguir libre en el nuevo horario
-                boolean scheduleChanged = !departure.equals(trip.getDepartureTime()) || !arrival.equals(trip.getArrivalEta());
                 if (scheduleChanged) {
                         assignmentRepository.findByTripId(trip.getId())
                                         .filter(a -> a.getDriver() != null)
@@ -478,6 +489,29 @@ public class TripServiceImpl implements TripService {
                 if (!isValidTransition) {
                         throw new InvalidStateTransitionException(currentStatus.name(), newStatus.name());
                 }
+        }
+
+        // Valida que las paradas existan, pertenezcan a la ruta del viaje y formen un tramo hacia adelante
+        private Stop[] validateSegment(Trip trip, Long fromStopId, Long toStopId) {
+                Stop fromStop = stopRepository.findById(fromStopId)
+                                .orElseThrow(() -> new ResourceNotFoundException("Parada origen", fromStopId));
+
+                Stop toStop = stopRepository.findById(toStopId)
+                                .orElseThrow(() -> new ResourceNotFoundException("Parada destino", toStopId));
+
+                if (!fromStop.getRoute().getId().equals(trip.getRoute().getId()) ||
+                                !toStop.getRoute().getId().equals(trip.getRoute().getId())) {
+                        throw new BusinessException("Las paradas no pertenecen a la ruta del viaje",
+                                        HttpStatus.BAD_REQUEST,
+                                        "INVALID_STOPS");
+                }
+
+                if (fromStop.getOrder() >= toStop.getOrder()) {
+                        throw new BusinessException("La parada de origen debe ser anterior a la de destino",
+                                        HttpStatus.BAD_REQUEST,
+                                        "INVALID_SEGMENT");
+                }
+                return new Stop[] { fromStop, toStop };
         }
 
         // Un hold sin tramo bloquea todo el viaje; uno con tramo solo si se solapa por orden de parada

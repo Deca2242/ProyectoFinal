@@ -83,7 +83,7 @@ class BoardingServiceImplTest {
                 1L, 1L, "Route Name", "Origin", "Destination",
                 1L, "Bus Plate", 40,
                 null, null, null,
-                Trip.TripStatus.SCHEDULED, 0, 0.0
+                Trip.TripStatus.SCHEDULED, 0, 0.0, null, null, null, null
         );
     }
 

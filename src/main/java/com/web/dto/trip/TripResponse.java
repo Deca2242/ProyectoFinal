@@ -20,6 +20,9 @@ public record TripResponse(
     LocalDateTime arrivalEta,
     Trip.TripStatus status,
     Integer soldSeats,  // Para mostrar ocupación
-    Double occupancyPercentage
+    Double occupancyPercentage,
+    Integer availableSeats,  // Capacidad + overbooking aprobado - vendidas
+    String platform,
+    LocalDateTime departedAt,  // Hora real de salida
+    LocalDateTime arrivedAt    // Hora real de llegada
 ) implements Serializable {}
-

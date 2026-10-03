@@ -2,6 +2,7 @@ package com.web.repository;
 
 import com.web.entity.Stop;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -17,6 +18,19 @@ public interface StopRepository extends JpaRepository<Stop, Long> {
 
     // Validar order único dentro de una ruta
     boolean existsByRouteIdAndOrder(Long routeId, Integer order);
+
+    // Número de paradas de una ruta (la siguiente debe tener orden count + 1)
+    long countByRouteId(Long routeId);
+
+    // Tras borrar una parada se corren una posición las siguientes para que el orden siga contiguo.
+    // La restricción UNIQUE (route_id, stop_order) es DEFERRABLE, así que se valida al final de la sentencia
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query(value = """
+            UPDATE stops SET stop_order = stop_order - 1
+            WHERE route_id = :routeId
+            AND stop_order > :order
+            """, nativeQuery = true)
+    int shiftOrdersAfter(@Param("routeId") Long routeId, @Param("order") Integer order);
 
     // Obtener el orden de una parada para validación de tramos
     @Query("""
