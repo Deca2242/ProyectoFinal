@@ -74,6 +74,8 @@ class TicketOfflineSaleTest {
 
     @Mock
     private com.web.service.notification.NotificationService notificationService;
+    @Mock
+    private com.web.service.payment.PaymentService paymentService;
 
     @InjectMocks
     private TicketServiceImpl ticketService;

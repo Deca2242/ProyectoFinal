@@ -11,6 +11,7 @@ import com.web.dto.dispatch.Assignment.AssignmentUpdateRequest;
 import com.web.dto.parcel.ParcelCreateRequest;
 import com.web.dto.parcel.ParcelStatusUpdateRequest;
 import com.web.dto.payment.CashCloseRequest;
+import com.web.dto.payment.PaymentConfirmRequest;
 import com.web.dto.ticket.TicketCreateRequest;
 import com.web.dto.trip.TripCreateRequest;
 import com.web.entity.*;
@@ -131,6 +132,7 @@ class ProjectRequirementsIntegrationTest extends BaseIntegrationTest {
 
         mvc.perform(post("/api/v1/trips/{id}/boarding/open", trip.getId()).header("Authorization", bearer(dispatcherToken)))
                 .andExpect(status().isOk());
+        payOnBoarding(driverToken, boarded);
         board(driverToken, qr(boarded)).andExpect(status().isOk());
 
         // Otro conductor no puede dar salida a este viaje
@@ -170,6 +172,9 @@ class ProjectRequirementsIntegrationTest extends BaseIntegrationTest {
         String driverToken = staff("driver@test.com", User.Role.DRIVER);
         String dispatcherToken = staff("disp@test.com", User.Role.DISPATCHER);
         assignAndApproveChecklist(dispatcherToken, "driver@test.com", "disp@test.com");
+        // Ambos pagaron (contraentrega) antes de cerrar el abordaje
+        payOnBoarding(driverToken, late);
+        payOnBoarding(driverToken, resold);
 
         mvc.perform(post("/api/v1/trips/{id}/boarding/open", trip.getId()).header("Authorization", bearer(dispatcherToken)))
                 .andExpect(status().isOk());
@@ -239,8 +244,6 @@ class ProjectRequirementsIntegrationTest extends BaseIntegrationTest {
     @Test
     void cashClose_shouldIncludeBaggageFeesAndSubtractRefunds() throws Exception {
         String clerkToken = staff("clerk@test.com", User.Role.CLERK);
-        // Base del día (puede haber ventas en efectivo de los datos semilla)
-        BigDecimal baseline = expectedCash(clerkToken);
 
         String paxToken = registerAndLogin("cash@test.com");
         Long pax = userId("cash@test.com");
@@ -254,8 +257,8 @@ class ProjectRequirementsIntegrationTest extends BaseIntegrationTest {
                 .andReturn().getResponse().getContentAsString();
         BigDecimal refund = new BigDecimal(om.readTree(cancelBody).get("refundAmount").asText());
 
-        BigDecimal expected = baseline
-                .add(new BigDecimal(withBaggage.get("price").asText()))
+        // La caja se cierra una sola vez por día: el cajero nuevo solo tiene estas ventas
+        BigDecimal expected = new BigDecimal(withBaggage.get("price").asText())
                 .add(new BigDecimal(withBaggage.get("baggage").get("excessFee").asText()))
                 .add(new BigDecimal(cancelled.get("price").asText()))
                 .subtract(refund);
@@ -425,6 +428,16 @@ class ProjectRequirementsIntegrationTest extends BaseIntegrationTest {
                 .content(om.writeValueAsString(request)));
     }
 
+    // Contraentrega: el conductor asignado cobra al subir el ticket comprado por la app
+    private void payOnBoarding(String driverToken, Long ticketId) throws Exception {
+        mvc.perform(post("/api/v1/payments/confirm")
+                        .header("Authorization", "Bearer " + driverToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(om.writeValueAsString(new PaymentConfirmRequest(
+                                ticketId, Ticket.PaymentMethod.CASH, null, null, null))))
+                .andExpect(status().isOk());
+    }
+
     private ResultActions board(String token, String qr) throws Exception {
         return mvc.perform(post("/api/v1/tickets/qr/{qr}/board", qr).header("Authorization", bearer(token)));
     }
@@ -469,7 +482,7 @@ class ProjectRequirementsIntegrationTest extends BaseIntegrationTest {
                         .header("Authorization", bearer(clerkToken))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(om.writeValueAsString(new CashCloseRequest(
-                                userId("clerk@test.com"), LocalDate.now(), null, BigDecimal.ZERO, null))))
+                                LocalDate.now(), null, BigDecimal.ZERO, null))))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         return new BigDecimal(om.readTree(body).get("expectedAmount").asText());

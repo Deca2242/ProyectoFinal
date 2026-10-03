@@ -109,8 +109,10 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.POST, "/api/v1/parcels/*/deliver").hasAnyRole("DRIVER", "CLERK")
 
                         // Payments
-                        .requestMatchers(HttpMethod.POST, "/api/v1/payments/confirm").hasRole("CLERK")
+                        .requestMatchers(HttpMethod.POST, "/api/v1/payments/confirm").hasAnyRole("CLERK", "DRIVER")
+                        .requestMatchers(HttpMethod.GET, "/api/v1/tickets/*/receipt").hasAnyRole("PASSENGER", "CLERK", "ADMIN", "DISPATCHER")
                         .requestMatchers(HttpMethod.POST, "/api/v1/cash/close").hasAnyRole("CLERK", "DRIVER")
+                        .requestMatchers(HttpMethod.GET, "/api/v1/cash/closes").hasAnyRole("CLERK", "DRIVER", "ADMIN")
 
                         // Sincronización offline
                         .requestMatchers(HttpMethod.POST, "/api/v1/sync/tickets").hasAnyRole("CLERK", "DRIVER")

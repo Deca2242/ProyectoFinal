@@ -6,6 +6,7 @@ import com.web.dto.admin.ConfigUpdateRequest;
 import com.web.dto.auth.Login.LoginRequest;
 import com.web.dto.auth.Login.LoginResponse;
 import com.web.dto.auth.Login.RegisterRequest;
+import com.web.dto.payment.PaymentConfirmRequest;
 import com.web.dto.ticket.TicketCancelResponse;
 import com.web.dto.ticket.TicketCreateRequest;
 import com.web.dto.ticket.TicketResponse;
@@ -296,6 +297,21 @@ class AdminConfigIntegrationTest extends BaseIntegrationTest {
                                 TicketResponse.class);
                 Long ticketId = ticketResponse.id();
                 BigDecimal actualTicketPrice = ticketResponse.price();
+
+                // La taquilla confirma el pago con tarjeta: solo un ticket pagado se reembolsa
+                createUser(new RegisterRequest("Taquilla", "clerk@test.com", "1234567890", "password123", User.Role.CLERK));
+                MvcResult clerkLogin = mvc.perform(post("/api/v1/auth/login")
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .content(om.writeValueAsString(new LoginRequest("clerk@test.com", "password123"))))
+                                .andExpect(status().isOk())
+                                .andReturn();
+                String clerkToken = om.readValue(clerkLogin.getResponse().getContentAsString(), LoginResponse.class).token();
+                mvc.perform(post("/api/v1/payments/confirm")
+                                .header("Authorization", "Bearer " + clerkToken)
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .content(om.writeValueAsString(new PaymentConfirmRequest(
+                                                ticketId, Ticket.PaymentMethod.CARD, "DATAFONO-1", null, null))))
+                                .andExpect(status().isOk());
 
                 // Pasajero cancela (más de 48h antes)
                 MvcResult cancelResult = mvc.perform(post("/api/v1/tickets/{id}/cancel", ticketId)

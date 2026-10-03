@@ -160,15 +160,13 @@ class AccessAndDispatchRulesIntegrationTest extends BaseIntegrationTest {
         registerAndLogin("buyer@test.com");
         Long buyer = userId("buyer@test.com");
 
-        BigDecimal before1 = expectedCash(clerk1, "clerk1@test.com");
-        BigDecimal before2 = expectedCash(clerk2, "clerk2@test.com");
-
         String body = purchase(clerk1, buyer, 3).andExpect(status().isCreated())
                 .andReturn().getResponse().getContentAsString();
         BigDecimal price = new BigDecimal(om.readTree(body).get("price").asText());
 
-        assertThat(expectedCash(clerk1, "clerk1@test.com")).isEqualByComparingTo(before1.add(price));
-        assertThat(expectedCash(clerk2, "clerk2@test.com")).isEqualByComparingTo(before2);
+        // La caja se cierra una sola vez por día: cada cajero nuevo solo tiene sus propias ventas
+        assertThat(expectedCash(clerk1)).isEqualByComparingTo(price);
+        assertThat(expectedCash(clerk2)).isEqualByComparingTo(BigDecimal.ZERO);
     }
 
     // ---------- Despacho: asignación y checklist ----------
@@ -321,12 +319,12 @@ class AccessAndDispatchRulesIntegrationTest extends BaseIntegrationTest {
                 .content(om.writeValueAsString(new AssignmentUpdateRequest(null, true, true, true))));
     }
 
-    private BigDecimal expectedCash(String token, String email) throws Exception {
+    private BigDecimal expectedCash(String token) throws Exception {
         String body = mvc.perform(post("/api/v1/cash/close")
                         .header("Authorization", bearer(token))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(om.writeValueAsString(new CashCloseRequest(
-                                userId(email), LocalDate.now(), null, BigDecimal.ZERO, null))))
+                                LocalDate.now(), null, BigDecimal.ZERO, null))))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         return new BigDecimal(om.readTree(body).get("expectedAmount").asText());
