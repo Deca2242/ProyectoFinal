@@ -73,6 +73,7 @@ class TicketServiceImplTest {
     private com.web.service.notification.NotificationService notificationService;
     @Mock
     private com.web.service.payment.PaymentService paymentService;
+    @Mock
     private com.web.service.baggage.BaggageService baggageService;
 
     @InjectMocks
