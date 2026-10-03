@@ -19,7 +19,7 @@ import static org.assertj.core.api.Assertions.within;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
-// Tarea programada de aviso de llegada próxima (viajes DEPARTED que llegan en los próximos 15 minutos)
+// Tarea programada de aviso de llegada próxima (viajes DEPARTED que llegan en los próximos 15 minutos o ya retrasados)
 @ExtendWith(MockitoExtension.class)
 class NotificationSchedulerTest {
 
@@ -36,7 +36,7 @@ class NotificationSchedulerTest {
         // Given
         Trip first = Trip.builder().id(1L).status(Trip.TripStatus.DEPARTED).build();
         Trip second = Trip.builder().id(2L).status(Trip.TripStatus.DEPARTED).build();
-        when(tripRepository.findDepartedTripsArrivingBetween(any(), any())).thenReturn(List.of(first, second));
+        when(tripRepository.findDepartedTripsArrivingBy(any())).thenReturn(List.of(first, second));
 
         // When
         scheduler.notifyUpcomingArrivals();
@@ -52,21 +52,35 @@ class NotificationSchedulerTest {
     }
 
     @Test
-    void shouldNotifyUpcomingArrivals_QueryWindowOfFifteenMinutesFromNow() {
+    void shouldNotifyUpcomingArrivals_QueryUpToFifteenMinutesFromNowWithoutLowerBound() {
         // Given
-        when(tripRepository.findDepartedTripsArrivingBetween(any(), any())).thenReturn(List.of());
+        when(tripRepository.findDepartedTripsArrivingBy(any())).thenReturn(List.of());
         LocalDateTime before = LocalDateTime.now();
 
         // When
         scheduler.notifyUpcomingArrivals();
 
         // Then
-        ArgumentCaptor<LocalDateTime> from = ArgumentCaptor.forClass(LocalDateTime.class);
         ArgumentCaptor<LocalDateTime> to = ArgumentCaptor.forClass(LocalDateTime.class);
-        verify(tripRepository).findDepartedTripsArrivingBetween(from.capture(), to.capture());
-        assertThat(from.getValue()).isCloseTo(before, within(Duration.ofSeconds(5)));
-        assertThat(Duration.between(from.getValue(), to.getValue())).isEqualTo(Duration.ofMinutes(15));
+        verify(tripRepository).findDepartedTripsArrivingBy(to.capture());
+        assertThat(to.getValue()).isCloseTo(before.plusMinutes(15), within(Duration.ofSeconds(5)));
         verifyNoInteractions(notificationService);
         verify(tripRepository, never()).save(any());
+    }
+
+    @Test
+    void shouldNotifyUpcomingArrivals_WithEtaAlreadyPassed_NotifyDelayedTrip() {
+        // Given: viaje retrasado, su ETA pasó hace 20 minutos y sigue DEPARTED sin aviso
+        Trip delayed = Trip.builder().id(3L).status(Trip.TripStatus.DEPARTED)
+                .arrivalEta(LocalDateTime.now().minusMinutes(20)).build();
+        when(tripRepository.findDepartedTripsArrivingBy(any())).thenReturn(List.of(delayed));
+
+        // When
+        scheduler.notifyUpcomingArrivals();
+
+        // Then
+        verify(notificationService).notifyArrivalSoon(delayed);
+        verify(tripRepository).save(delayed);
+        assertThat(delayed.getArrivalNotified()).isTrue();
     }
 }

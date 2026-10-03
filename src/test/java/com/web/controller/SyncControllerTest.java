@@ -13,6 +13,8 @@ import com.web.dto.sync.TicketSyncRequest;
 import com.web.entity.SyncBatch;
 import com.web.entity.Ticket;
 import com.web.exception.BusinessException;
+import com.web.exception.InvalidStateTransitionException;
+import com.web.exception.ResourceNotFoundException;
 import com.web.service.sync.SyncService;
 import com.web.util.JwtTokenProvider;
 import org.junit.jupiter.api.Test;
@@ -39,6 +41,7 @@ import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
@@ -244,9 +247,7 @@ class SyncControllerTest {
     @ParameterizedTest
     @ValueSource(strings = {"CLERK", "DRIVER", "DISPATCHER", "ADMIN"})
     void getConflicts_shouldReturn200ForAllowedRoles(String role) throws Exception {
-        when(syncService.getConflicts("tablet-1")).thenReturn(List.of(new SyncConflictResponse(
-                1L, 100L, "tablet-1", SyncBatch.SyncType.TICKETS, "c-2", "SEAT_NOT_AVAILABLE",
-                "ocupado", "{}", LocalDateTime.now())));
+        when(syncService.getConflicts("tablet-1", false)).thenReturn(List.of(conflictResponse(null)));
 
         mvc.perform(get("/api/v1/sync/conflicts").param("deviceId", "tablet-1").with(user("u").roles(role)))
                 .andExpect(status().isOk())
@@ -257,13 +258,24 @@ class SyncControllerTest {
 
     @Test
     @WithMockUser(roles = "CLERK")
-    void getConflicts_shouldAllowMissingDeviceId() throws Exception {
-        when(syncService.getConflicts(null)).thenReturn(List.of());
+    void getConflicts_shouldAllowMissingDeviceId_andReturnOnlyOpenByDefault() throws Exception {
+        when(syncService.getConflicts(null, false)).thenReturn(List.of());
 
         mvc.perform(get("/api/v1/sync/conflicts"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$").isEmpty());
-        verify(syncService).getConflicts(null);
+        verify(syncService).getConflicts(null, false);
+    }
+
+    @Test
+    @WithMockUser(roles = "DISPATCHER")
+    void getConflicts_shouldPassResolvedFilter() throws Exception {
+        when(syncService.getConflicts(null, true)).thenReturn(List.of(conflictResponse(LocalDateTime.now())));
+
+        mvc.perform(get("/api/v1/sync/conflicts").param("resolved", "true"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].resolvedAt").isNotEmpty())
+                .andExpect(jsonPath("$[0].resolvedById").value(20));
     }
 
     @Test
@@ -277,5 +289,59 @@ class SyncControllerTest {
     void getConflicts_shouldReturn401WithoutAuthentication() throws Exception {
         mvc.perform(get("/api/v1/sync/conflicts"))
                 .andExpect(status().isUnauthorized());
+    }
+
+    // ---------- PATCH /sync/conflicts/{id}/resolve ----------
+
+    @ParameterizedTest
+    @ValueSource(strings = {"CLERK", "DISPATCHER", "ADMIN"})
+    void resolveConflict_shouldReturn200ForAllowedRoles(String role) throws Exception {
+        when(syncService.resolveConflict(1L)).thenReturn(conflictResponse(LocalDateTime.now()));
+
+        mvc.perform(patch("/api/v1/sync/conflicts/1/resolve").with(user("u").roles(role)).with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(1))
+                .andExpect(jsonPath("$.resolvedAt").isNotEmpty());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"DRIVER", "PASSENGER"})
+    void resolveConflict_shouldReturn403ForOtherRoles(String role) throws Exception {
+        mvc.perform(patch("/api/v1/sync/conflicts/1/resolve").with(user("u").roles(role)).with(csrf()))
+                .andExpect(status().isForbidden());
+        verifyNoInteractions(syncService);
+    }
+
+    @Test
+    @WithMockUser(roles = "CLERK")
+    void resolveConflict_shouldReturn422WhenAlreadyResolved() throws Exception {
+        when(syncService.resolveConflict(1L)).thenThrow(new InvalidStateTransitionException("El conflicto ya fue resuelto"));
+
+        mvc.perform(patch("/api/v1/sync/conflicts/1/resolve").with(csrf()))
+                .andExpect(status().isUnprocessableEntity());
+    }
+
+    @Test
+    @WithMockUser(roles = "CLERK")
+    void resolveConflict_shouldReturn403WhenConflictBelongsToOtherClerk() throws Exception {
+        when(syncService.resolveConflict(1L)).thenThrow(new BusinessException("El conflicto pertenece a otro usuario",
+                HttpStatus.FORBIDDEN, "NOT_CONFLICT_OWNER"));
+
+        mvc.perform(patch("/api/v1/sync/conflicts/1/resolve").with(csrf()))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void resolveConflict_shouldReturn404WhenUnknown() throws Exception {
+        when(syncService.resolveConflict(99L)).thenThrow(new ResourceNotFoundException("Conflicto de sincronización", 99L));
+
+        mvc.perform(patch("/api/v1/sync/conflicts/99/resolve").with(csrf()))
+                .andExpect(status().isNotFound());
+    }
+
+    private SyncConflictResponse conflictResponse(LocalDateTime resolvedAt) {
+        return new SyncConflictResponse(1L, 100L, "tablet-1", SyncBatch.SyncType.TICKETS, "c-2",
+                "SEAT_NOT_AVAILABLE", "ocupado", "{}", LocalDateTime.now(), resolvedAt, resolvedAt == null ? null : 20L);
     }
 }

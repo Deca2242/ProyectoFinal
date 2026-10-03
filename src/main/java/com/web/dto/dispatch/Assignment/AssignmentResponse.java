@@ -1,6 +1,7 @@
 package com.web.dto.dispatch.Assignment;
 
 import java.io.Serializable;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 public record AssignmentResponse(
@@ -20,6 +21,11 @@ public record AssignmentResponse(
     java.time.LocalDate tripDate,
     LocalDateTime departureTime,
     LocalDateTime arrivalEta,
-    String busPlate
+    String busPlate,
+    // Vigencia del checklist del bus y estado calculado para el día del viaje
+    // (con fecha: vence el día del viaje o después; sin fecha: el booleano soatValid / revisionValid)
+    LocalDate soatExpiresAt,
+    LocalDate technicalReviewExpiresAt,
+    Boolean soatValidOnTripDate,
+    Boolean reviewValidOnTripDate
 ) implements Serializable {}
-

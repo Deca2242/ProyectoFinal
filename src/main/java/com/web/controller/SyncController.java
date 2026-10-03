@@ -35,10 +35,19 @@ public class SyncController {
         return ResponseEntity.ok(syncService.syncBoardings(request));
     }
 
-    // Operaciones rechazadas al sincronizar
+    // Operaciones rechazadas al sincronizar: por defecto solo las abiertas (resolved=true: las ya revisadas)
     @GetMapping("/conflicts")
     @PreAuthorize("hasAnyRole('CLERK', 'DRIVER', 'DISPATCHER', 'ADMIN')")
-    public ResponseEntity<List<SyncConflictResponse>> getConflicts(@RequestParam(required = false) String deviceId) {
-        return ResponseEntity.ok(syncService.getConflicts(deviceId));
+    public ResponseEntity<List<SyncConflictResponse>> getConflicts(
+            @RequestParam(required = false) String deviceId,
+            @RequestParam(defaultValue = "false") boolean resolved) {
+        return ResponseEntity.ok(syncService.getConflicts(deviceId, resolved));
+    }
+
+    // Marca un conflicto como revisado (la taquilla los suyos; DISPATCHER y ADMIN cualquiera)
+    @PatchMapping("/conflicts/{id}/resolve")
+    @PreAuthorize("hasAnyRole('CLERK', 'DISPATCHER', 'ADMIN')")
+    public ResponseEntity<SyncConflictResponse> resolveConflict(@PathVariable Long id) {
+        return ResponseEntity.ok(syncService.resolveConflict(id));
     }
 }

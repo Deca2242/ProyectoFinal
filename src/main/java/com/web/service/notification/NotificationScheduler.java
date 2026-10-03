@@ -10,7 +10,8 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.util.List;
 
-// Avisa a los pasajeros cuando su viaje en curso llegará en los próximos 15 minutos (una sola vez por viaje)
+// Avisa a los pasajeros cuando su viaje en curso llegará en los próximos 15 minutos (una sola vez por viaje).
+// Un viaje retrasado (ETA ya pasada y aún DEPARTED) que no recibió el aviso también se notifica
 @Component
 @RequiredArgsConstructor
 public class NotificationScheduler {
@@ -24,7 +25,7 @@ public class NotificationScheduler {
     @Transactional
     public void notifyUpcomingArrivals() {
         LocalDateTime now = LocalDateTime.now();
-        List<Trip> trips = tripRepository.findDepartedTripsArrivingBetween(now, now.plusMinutes(ARRIVAL_WINDOW_MINUTES));
+        List<Trip> trips = tripRepository.findDepartedTripsArrivingBy(now.plusMinutes(ARRIVAL_WINDOW_MINUTES));
         for (Trip trip : trips) {
             notificationService.notifyArrivalSoon(trip);
             trip.setArrivalNotified(true);

@@ -3,6 +3,7 @@ package com.web.service.dispatch;
 import com.web.dto.trip.TripResponse;
 import com.web.dto.trip.mapper.TripMapper;
 import com.web.entity.Assignment;
+import com.web.entity.Bus;
 import com.web.entity.Ticket;
 import com.web.entity.Trip;
 import com.web.entity.User;
@@ -28,6 +29,7 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -71,6 +73,7 @@ class BoardingServiceImplTest {
         assignment = Assignment.builder()
                 .id(1L)
                 .trip(trip)
+                .driver(User.builder().id(10L).email("driver@test.com").role(User.Role.DRIVER).build())
                 .checklistOk(true)
                 .soatValid(true)
                 .revisionValid(true)
@@ -88,6 +91,7 @@ class BoardingServiceImplTest {
     void shouldOpenBoarding_WithScheduledTrip_ChangeStatusToBoarding() {
         // Given
         when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+        when(assignmentRepository.findByTripId(1L)).thenReturn(Optional.of(assignment));
         when(tripRepository.save(any(Trip.class))).thenReturn(trip);
         when(tripMapper.toResponse(any(Trip.class))).thenReturn(tripResponse);
 
@@ -364,21 +368,142 @@ class BoardingServiceImplTest {
         List<Ticket> unboarded = List.of(t1, t2);
         when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
         when(ticketRepository.findUnboardedOriginTickets(1L)).thenReturn(unboarded);
-        when(configService.getNoShowFee()).thenReturn(BigDecimal.valueOf(5000));
+        // El fee configurable se calcula sobre el precio de cada ticket (porcentaje o monto fijo)
+        t1.setPrice(BigDecimal.valueOf(50000));
+        t2.setPrice(BigDecimal.valueOf(80000));
+        when(configService.computeNoShowFee(BigDecimal.valueOf(50000))).thenReturn(BigDecimal.valueOf(5000));
+        when(configService.computeNoShowFee(BigDecimal.valueOf(80000))).thenReturn(BigDecimal.valueOf(8000));
         when(tripRepository.save(trip)).thenReturn(trip);
         when(tripMapper.toResponse(trip)).thenReturn(tripResponse);
+        LocalDateTime before = LocalDateTime.now();
 
         // When
         boardingService.closeBoarding(1L);
 
         // Then
-        assertThat(unboarded).allSatisfy(t -> {
-            assertThat(t.getStatus()).isEqualTo(Ticket.TicketStatus.NO_SHOW);
-            assertThat(t.getNoShowFee()).isEqualByComparingTo("5000");
-        });
+        assertThat(t1.getStatus()).isEqualTo(Ticket.TicketStatus.NO_SHOW);
+        assertThat(t1.getNoShowFee()).isEqualByComparingTo("5000");
+        assertThat(t2.getStatus()).isEqualTo(Ticket.TicketStatus.NO_SHOW);
+        assertThat(t2.getNoShowFee()).isEqualByComparingTo("8000");
         verify(ticketRepository).saveAll(unboarded);
-        verify(configService, times(1)).getNoShowFee();
+        verify(configService, never()).getNoShowFee();
         assertThat(trip.getStatus()).isEqualTo(Trip.TripStatus.BOARDING);
+        assertThat(trip.getBoardingClosedAt()).isNotNull().isBetween(before, LocalDateTime.now());
+    }
+
+    @Test
+    void shouldCloseBoarding_Twice_BeIdempotent() {
+        // Given: el abordaje ya se cerró hace 10 minutos
+        LocalDateTime closedAt = LocalDateTime.now().minusMinutes(10);
+        trip.setStatus(Trip.TripStatus.BOARDING);
+        trip.setBoardingClosedAt(closedAt);
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+        when(tripMapper.toResponse(trip)).thenReturn(tripResponse);
+
+        // When
+        TripResponse result = boardingService.closeBoarding(1L);
+
+        // Then: no se vuelve a marcar no-show ni cambia la hora de cierre
+        assertThat(result).isSameAs(tripResponse);
+        assertThat(trip.getBoardingClosedAt()).isEqualTo(closedAt);
+        verifyNoInteractions(ticketRepository, configService);
+        verify(tripRepository, never()).save(any());
+    }
+
+    @Test
+    void shouldOpenBoarding_WithoutAssignment_ThrowConflict() {
+        // Given
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+        when(assignmentRepository.findByTripId(1L)).thenReturn(Optional.empty());
+
+        // When/Then
+        assertThatThrownBy(() -> boardingService.openBoarding(1L))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    assertThat(((BusinessException) ex).getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                    assertThat(((BusinessException) ex).getCode()).isEqualTo("ASSIGNMENT_REQUIRED");
+                });
+        assertThat(trip.getStatus()).isEqualTo(Trip.TripStatus.SCHEDULED);
+        verify(tripRepository, never()).save(any());
+    }
+
+    @Test
+    void shouldOpenBoarding_WithAssignmentWithoutDriver_ThrowConflict() {
+        // Given
+        assignment.setDriver(null);
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+        when(assignmentRepository.findByTripId(1L)).thenReturn(Optional.of(assignment));
+
+        // When/Then
+        assertThatThrownBy(() -> boardingService.openBoarding(1L))
+                .isInstanceOf(BusinessException.class)
+                .extracting("code").isEqualTo("ASSIGNMENT_REQUIRED");
+    }
+
+    @Test
+    void shouldOpenBoarding_AfterClose_ReopenAndClearBoardingClosedAt() {
+        // Given
+        trip.setStatus(Trip.TripStatus.BOARDING);
+        trip.setBoardingClosedAt(LocalDateTime.now().minusMinutes(5));
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+        when(assignmentRepository.findByTripId(1L)).thenReturn(Optional.of(assignment));
+        when(tripRepository.save(trip)).thenReturn(trip);
+        when(tripMapper.toResponse(trip)).thenReturn(tripResponse);
+
+        // When
+        boardingService.openBoarding(1L);
+
+        // Then
+        assertThat(trip.getStatus()).isEqualTo(Trip.TripStatus.BOARDING);
+        assertThat(trip.getBoardingClosedAt()).isNull();
+    }
+
+    // ---------- Checklist con vigencia en la salida ----------
+
+    @Test
+    void shouldDepartTrip_WithExpiredReviewDate_ThrowChecklistExpiredWithDetail() {
+        // Given: la revisión técnico-mecánica venció antes del viaje (aunque el booleano diga que es válida)
+        LocalDate tripDate = LocalDate.now().plusDays(1);
+        trip.setStatus(Trip.TripStatus.BOARDING);
+        trip.setTripDate(tripDate);
+        trip.setBus(Bus.builder().id(3L).soatExpiresAt(tripDate.plusYears(1))
+                .technicalReviewExpiresAt(tripDate.minusDays(2)).build());
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+        when(assignmentRepository.findByTripId(1L)).thenReturn(Optional.of(assignment));
+
+        // When/Then
+        assertThatThrownBy(() -> boardingService.departTrip(1L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("revisión técnico-mecánica vencida el " + tripDate.minusDays(2))
+                .satisfies(ex -> {
+                    assertThat(((BusinessException) ex).getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+                    assertThat(((BusinessException) ex).getCode()).isEqualTo("CHECKLIST_EXPIRED");
+                });
+        assertThat(trip.getStatus()).isEqualTo(Trip.TripStatus.BOARDING);
+        verify(tripRepository, never()).save(any());
+    }
+
+    @Test
+    void shouldDepartTrip_WithValidDates_IgnoreBooleans() {
+        // Given: con fechas vigentes no importan los booleanos del checklist
+        LocalDate tripDate = LocalDate.now().plusDays(1);
+        trip.setStatus(Trip.TripStatus.BOARDING);
+        trip.setTripDate(tripDate);
+        trip.setBus(Bus.builder().id(3L).soatExpiresAt(tripDate).technicalReviewExpiresAt(tripDate.plusMonths(3)).build());
+        assignment.setSoatValid(false);
+        assignment.setRevisionValid(false);
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+        when(assignmentRepository.findByTripId(1L)).thenReturn(Optional.of(assignment));
+        when(ticketRepository.findUnboardedOriginTickets(1L)).thenReturn(List.of());
+        when(tripRepository.save(trip)).thenReturn(trip);
+        when(tripMapper.toResponse(trip)).thenReturn(tripResponse);
+
+        // When
+        boardingService.departTrip(1L);
+
+        // Then
+        assertThat(trip.getStatus()).isEqualTo(Trip.TripStatus.DEPARTED);
+        assertThat(trip.getBoardingClosedAt()).isEqualTo(trip.getDepartedAt());
     }
 
     @Test
@@ -407,7 +532,7 @@ class BoardingServiceImplTest {
         when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
         when(assignmentRepository.findByTripId(1L)).thenReturn(Optional.of(assignment));
         when(ticketRepository.findUnboardedOriginTickets(1L)).thenReturn(unboarded);
-        when(configService.getNoShowFee()).thenReturn(BigDecimal.valueOf(7000));
+        when(configService.computeNoShowFee(any())).thenReturn(BigDecimal.valueOf(7000));
         when(tripRepository.save(trip)).thenReturn(trip);
         when(tripMapper.toResponse(trip)).thenReturn(tripResponse);
         LocalDateTime before = LocalDateTime.now();

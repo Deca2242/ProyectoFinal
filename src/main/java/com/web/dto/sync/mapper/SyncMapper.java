@@ -13,6 +13,7 @@ public interface SyncMapper {
     @Mapping(target = "batchId", source = "batch.id")
     @Mapping(target = "deviceId", source = "batch.deviceId")
     @Mapping(target = "type", source = "batch.type")
+    @Mapping(target = "resolvedById", source = "resolvedBy.id")
     SyncConflictResponse toConflictResponse(SyncConflict conflict);
 
     List<SyncConflictResponse> toConflictResponseList(List<SyncConflict> conflicts);

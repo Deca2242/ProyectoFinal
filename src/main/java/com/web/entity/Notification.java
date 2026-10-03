@@ -55,6 +55,10 @@ public class Notification {
     @Builder.Default
     private LocalDateTime createdAt = LocalDateTime.now();
 
+    // Momento en que el destinatario la marcó como leída (NULL = no leída)
+    @Column(name = "read_at")
+    private LocalDateTime readAt;
+
     public enum Channel {
         WHATSAPP,
         SMS

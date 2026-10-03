@@ -139,15 +139,30 @@ public interface TripRepository extends JpaRepository<Trip, Long> {
     @Query(value = "SELECT id FROM trips WHERE id = :id FOR UPDATE", nativeQuery = true)
     Optional<Long> lockById(@Param("id") Long id);
 
-    // Viajes en curso que llegan dentro de la ventana y aún no tienen aviso de llegada próxima
+    // Viajes en curso que llegan antes de :to y aún no tienen aviso de llegada próxima.
+    // Sin cota inferior: un viaje retrasado (ETA ya pasada y aún DEPARTED) también recibe el aviso
     @Query("""
                 SELECT t FROM Trip t
                 WHERE t.status = 'DEPARTED'
                 AND t.arrivalNotified = false
-                AND t.arrivalEta BETWEEN :from AND :to
+                AND t.arrivalEta <= :to
             """)
-    List<Trip> findDepartedTripsArrivingBetween(
-        @Param("from") LocalDateTime from,
-        @Param("to") LocalDateTime to
+    List<Trip> findDepartedTripsArrivingBy(@Param("to") LocalDateTime to);
+
+    // ¿El bus tiene otro viaje activo que se cruce con [departureTime, arrivalEta)? (cambio de bus en despacho)
+    @Query("""
+                SELECT CASE WHEN COUNT(t) > 0 THEN true ELSE false END
+                FROM Trip t
+                WHERE t.bus.id = :busId
+                AND t.id <> :tripId
+                AND t.status NOT IN ('ARRIVED', 'CANCELLED')
+                AND t.departureTime < :arrivalEta
+                AND COALESCE(t.arrivalEta, t.departureTime) > :departureTime
+            """)
+    boolean existsOverlappingBusTrip(
+        @Param("busId") Long busId,
+        @Param("tripId") Long tripId,
+        @Param("departureTime") LocalDateTime departureTime,
+        @Param("arrivalEta") LocalDateTime arrivalEta
     );
 }

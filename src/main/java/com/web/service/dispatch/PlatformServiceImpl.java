@@ -2,12 +2,11 @@ package com.web.service.dispatch;
 
 import com.web.dto.notification.PlatformUpdateResponse;
 import com.web.entity.Trip;
-import com.web.exception.BusinessException;
+import com.web.exception.InvalidStateTransitionException;
 import com.web.exception.ResourceNotFoundException;
 import com.web.repository.TripRepository;
 import com.web.service.notification.NotificationService;
 import lombok.RequiredArgsConstructor;
-import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -26,10 +25,10 @@ public class PlatformServiceImpl implements PlatformService {
         Trip trip = tripRepository.findById(tripId)
                 .orElseThrow(() -> new ResourceNotFoundException("Viaje", tripId));
 
-        // El andén solo tiene sentido antes de la salida
+        // El andén solo tiene sentido antes de la salida (422: estado inválido para la operación)
         if (trip.getStatus() != Trip.TripStatus.SCHEDULED && trip.getStatus() != Trip.TripStatus.BOARDING) {
-            throw new BusinessException("Solo se puede cambiar el andén de un viaje programado o en abordaje (estado: "
-                    + trip.getStatus() + ")", HttpStatus.BAD_REQUEST, "INVALID_TRIP_STATUS");
+            throw new InvalidStateTransitionException("Solo se puede cambiar el andén de un viaje programado o en abordaje (estado: "
+                    + trip.getStatus() + ")");
         }
 
         String newPlatform = platform.trim().toUpperCase(Locale.ROOT);

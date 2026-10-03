@@ -15,6 +15,7 @@ public record NotificationResponse(
         Long tripId,
         Long ticketId,
         Notification.NotificationStatus status,
-        LocalDateTime createdAt
+        LocalDateTime createdAt,
+        LocalDateTime readAt
 ) implements Serializable {
 }

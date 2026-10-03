@@ -63,6 +63,10 @@ public class Trip {
     @Builder.Default
     private Boolean arrivalNotified = false;
 
+    // Cierre del abordaje (NULL mientras el abordaje no se ha cerrado)
+    @Column(name = "boarding_closed_at")
+    private LocalDateTime boardingClosedAt;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     @Builder.Default
     private LocalDateTime createdAt = LocalDateTime.now();

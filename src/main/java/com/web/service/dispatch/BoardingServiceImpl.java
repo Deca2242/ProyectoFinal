@@ -14,13 +14,10 @@ import com.web.repository.TripRepository;
 import com.web.service.admin.ConfigService;
 import com.web.util.SecurityUtils;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
-import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -39,19 +36,31 @@ public class BoardingServiceImpl implements BoardingService {
     private final TicketRepository ticketRepository;
     private final ConfigService configService;
 
-    /** Inicia el proceso de abordaje cambiando estado a BOARDING */
+    /** Inicia el proceso de abordaje cambiando estado a BOARDING (requiere conductor asignado).
+     *  Si el abordaje ya se había cerrado, lo reabre */
     @Override
     @Transactional
     public TripResponse openBoarding(Long tripId) {
         Trip trip = tripRepository.findById(tripId)
                 .orElseThrow(() -> new ResourceNotFoundException("Viaje", tripId));
 
-        if (trip.getStatus() != Trip.TripStatus.SCHEDULED) {
+        boolean reopening = trip.getStatus() == Trip.TripStatus.BOARDING && trip.getBoardingClosedAt() != null;
+        if (trip.getStatus() != Trip.TripStatus.SCHEDULED && !reopening) {
             throw new InvalidStateTransitionException(
-                    "Solo se puede abrir abordaje desde estado SCHEDULED (actual: " + trip.getStatus() + ")");
+                    "Solo se puede abrir abordaje desde estado SCHEDULED o reabrir uno cerrado (actual: " + trip.getStatus() + ")");
+        }
+
+        // Sin conductor asignado nadie podría validar los QR ni dar la salida
+        boolean hasDriver = assignmentRepository.findByTripId(tripId)
+                .map(a -> a.getDriver() != null)
+                .orElse(false);
+        if (!hasDriver) {
+            throw new BusinessException("El viaje necesita una asignación con conductor para abrir el abordaje",
+                    HttpStatus.CONFLICT, "ASSIGNMENT_REQUIRED");
         }
 
         trip.setStatus(Trip.TripStatus.BOARDING);
+        trip.setBoardingClosedAt(null);
         Trip updatedTrip = tripRepository.save(trip);
 
 
@@ -59,7 +68,8 @@ public class BoardingServiceImpl implements BoardingService {
         return tripMapper.toResponse(updatedTrip);
     }
 
-    /** Cierra el abordaje: quien no abordó en la parada de origen queda NO_SHOW (su silla vuelve a venta).
+    /** Cierra el abordaje: quien no abordó en la parada de origen queda NO_SHOW (su silla vuelve a venta)
+     *  y se registra boardingClosedAt. Cerrar un abordaje ya cerrado no cambia nada (idempotente).
      *  El viaje sigue en BOARDING hasta partir; un pasajero que llegue tarde aún puede abordar si su silla sigue libre */
     @Override
     @Transactional
@@ -72,7 +82,12 @@ public class BoardingServiceImpl implements BoardingService {
                     "Solo se puede cerrar abordaje desde estado BOARDING (actual: " + trip.getStatus() + ")");
         }
 
+        if (trip.getBoardingClosedAt() != null) {
+            return tripMapper.toResponse(trip);
+        }
+
         markNoShows(tripId);
+        trip.setBoardingClosedAt(LocalDateTime.now());
         Trip updatedTrip = tripRepository.save(trip);
 
 
@@ -97,24 +112,36 @@ public class BoardingServiceImpl implements BoardingService {
         // Autenticación del DRIVER en la salida: solo el conductor asignado puede partir
         requireAssignedDriver(assignment);
 
-        // Validar checklist completo: checklistOk, SOAT válido y revisión válida
-        if (!assignment.getChecklistOk()) {
+        // Validar checklist completo: checklistOk, SOAT vigente y revisión vigente el día del viaje
+        if (!Boolean.TRUE.equals(assignment.getChecklistOk())) {
             throw new BusinessException("No se puede partir sin checklist aprobado", HttpStatus.BAD_REQUEST, "CHECKLIST_NOT_APPROVED");
         }
-        
-        if (!assignment.getSoatValid()) {
+
+        // Con fechas de vencimiento en el bus manda la fecha; sin fechas, los booleanos del checklist
+        List<String> expired = assignment.expiredDocuments();
+        if (!expired.isEmpty()) {
+            throw new BusinessException("Checklist vencido para el viaje del " + trip.getTripDate() + ": "
+                    + String.join(", ", expired), HttpStatus.BAD_REQUEST, "CHECKLIST_EXPIRED");
+        }
+
+        if (!assignment.soatValidOnTripDate()) {
             throw new BusinessException("No se puede partir sin SOAT vigente", HttpStatus.BAD_REQUEST, "SOAT_NOT_VALID");
         }
         
-        if (!assignment.getRevisionValid()) {
+        if (!assignment.reviewValidOnTripDate()) {
             throw new BusinessException("No se puede partir sin revisión técnica vigente", HttpStatus.BAD_REQUEST, "REVISION_NOT_VALID");
         }
 
         // Quien no abordó en la parada de origen queda NO_SHOW (independiente de la tarea programada)
         markNoShows(tripId);
 
+        LocalDateTime now = LocalDateTime.now();
         trip.setStatus(Trip.TripStatus.DEPARTED);
-        trip.setDepartedAt(LocalDateTime.now());
+        trip.setDepartedAt(now);
+        // Partir cierra el abordaje si el despachador no lo había cerrado
+        if (trip.getBoardingClosedAt() == null) {
+            trip.setBoardingClosedAt(now);
+        }
         Trip updatedTrip = tripRepository.save(trip);
 
 
@@ -143,16 +170,17 @@ public class BoardingServiceImpl implements BoardingService {
         return tripMapper.toResponse(tripRepository.save(trip));
     }
 
-    // Marca NO_SHOW (con su fee) los tickets vendidos sin abordar que suben en la parada de origen
+    // Marca NO_SHOW los tickets vendidos sin abordar que suben en la parada de origen. El fee es el configurado
+    // por el ADMIN (porcentaje del precio del ticket o monto fijo). Cerrar el abordaje o partir es una decisión
+    // explícita del despacho: marca a todos los que faltan sin esperar la ventana de no-show de la tarea programada
     private void markNoShows(Long tripId) {
         List<Ticket> unboarded = ticketRepository.findUnboardedOriginTickets(tripId);
         if (unboarded.isEmpty()) {
             return;
         }
-        BigDecimal fee = configService.getNoShowFee();
         for (Ticket ticket : unboarded) {
             ticket.setStatus(Ticket.TicketStatus.NO_SHOW);
-            ticket.setNoShowFee(fee);
+            ticket.setNoShowFee(configService.computeNoShowFee(ticket.getPrice()));
         }
         ticketRepository.saveAll(unboarded);
     }

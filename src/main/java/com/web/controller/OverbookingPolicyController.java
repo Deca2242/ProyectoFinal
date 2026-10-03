@@ -33,6 +33,14 @@ public class OverbookingPolicyController {
         return ResponseEntity.status(HttpStatus.CREATED).body(policyService.createPolicy(routeId, request));
     }
 
+    // Edita la franja y el % de una política (sin solapar las demás franjas de la ruta)
+    @PutMapping("/overbooking-policies/{id}")
+    public ResponseEntity<OverbookingPolicyResponse> updatePolicy(
+            @PathVariable Long id,
+            @Valid @RequestBody OverbookingPolicyCreateRequest request) {
+        return ResponseEntity.ok(policyService.updatePolicy(id, request));
+    }
+
     @DeleteMapping("/overbooking-policies/{id}")
     public ResponseEntity<Void> deletePolicy(@PathVariable Long id) {
         policyService.deletePolicy(id);

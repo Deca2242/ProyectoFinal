@@ -15,6 +15,8 @@ import com.web.entity.SyncConflict;
 import com.web.entity.Ticket;
 import com.web.entity.User;
 import com.web.exception.BusinessException;
+import com.web.exception.InvalidStateTransitionException;
+import com.web.exception.ResourceNotFoundException;
 import com.web.repository.SyncBatchRepository;
 import com.web.repository.SyncConflictRepository;
 import com.web.repository.TicketRepository;
@@ -86,20 +88,33 @@ public class SyncServiceImpl implements SyncService {
     // Conflictos del usuario autenticado; ADMIN ve los de todos
     @Override
     @Transactional(readOnly = true)
-    public List<SyncConflictResponse> getConflicts(String deviceId) {
-        boolean byDevice = deviceId != null && !deviceId.isBlank();
-        List<SyncConflict> conflicts;
-        if (SecurityUtils.hasRole("ADMIN")) {
-            conflicts = byDevice
-                    ? syncConflictRepository.findByBatchDeviceIdOrderByCreatedAtDescIdDesc(deviceId)
-                    : syncConflictRepository.findAllByOrderByCreatedAtDescIdDesc();
-        } else {
-            Long userId = currentUser().getId();
-            conflicts = byDevice
-                    ? syncConflictRepository.findByBatchUserIdAndBatchDeviceIdOrderByCreatedAtDescIdDesc(userId, deviceId)
-                    : syncConflictRepository.findByBatchUserIdOrderByCreatedAtDescIdDesc(userId);
+    public List<SyncConflictResponse> getConflicts(String deviceId, boolean resolved) {
+        String device = deviceId != null && !deviceId.isBlank() ? deviceId : null;
+        Long userId = SecurityUtils.hasRole("ADMIN") ? null : currentUser().getId();
+        return syncMapper.toConflictResponseList(syncConflictRepository.search(userId, device, resolved));
+    }
+
+    // ADMIN y DISPATCHER revisan cualquier conflicto; la taquilla solo los de sus propios lotes.
+    // Resolver un conflicto ya resuelto es una transición inválida (422)
+    @Override
+    @Transactional
+    public SyncConflictResponse resolveConflict(Long conflictId) {
+        SyncConflict conflict = syncConflictRepository.findById(conflictId)
+                .orElseThrow(() -> new ResourceNotFoundException("Conflicto de sincronización", conflictId));
+        User user = currentUser();
+
+        boolean supervisor = SecurityUtils.hasRole("ADMIN") || SecurityUtils.hasRole("DISPATCHER");
+        if (!supervisor && !user.getId().equals(conflict.getBatch().getUser().getId())) {
+            throw new BusinessException("El conflicto pertenece a otro usuario",
+                    HttpStatus.FORBIDDEN, "NOT_CONFLICT_OWNER");
         }
-        return syncMapper.toConflictResponseList(conflicts);
+        if (conflict.getResolvedAt() != null) {
+            throw new InvalidStateTransitionException("El conflicto ya fue resuelto el " + conflict.getResolvedAt());
+        }
+
+        conflict.setResolvedAt(LocalDateTime.now());
+        conflict.setResolvedBy(user);
+        return syncMapper.toConflictResponse(syncConflictRepository.save(conflict));
     }
 
     private SyncItemResult syncSale(OfflineTicketSale sale, LocalDateTime now) {
@@ -139,6 +154,8 @@ public class SyncServiceImpl implements SyncService {
                 return new SyncItemResult(null, SyncItemResult.Status.DUPLICATE, ticketId, qrCode, null, null);
             }
             return conflict(null, qrCode, ex.getCode(), ex.getMessage());
+        } catch (DataIntegrityViolationException ex) {
+            return conflict(null, qrCode, "DATA_INTEGRITY_VIOLATION", "El abordaje viola una restricción de datos");
         } catch (RuntimeException ex) {
             log.error("Error inesperado al sincronizar el abordaje {}", qrCode, ex);
             return conflict(null, qrCode, "SYNC_ERROR", "Error inesperado al sincronizar el abordaje");

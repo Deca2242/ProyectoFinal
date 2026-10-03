@@ -83,7 +83,7 @@ class AssignmentAvailabilityRulesTest {
         // Given
         when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
         when(userRepository.findById(10L)).thenReturn(Optional.of(driver));
-        when(assignmentRepository.isDriverAvailable(10L, trip.getTripDate(), trip.getDepartureTime(), trip.getArrivalEta()))
+        when(assignmentRepository.isDriverAvailableExcludingTrip(10L, 1L, trip.getDepartureTime(), trip.getArrivalEta()))
                 .thenReturn(false);
 
         // When/Then
@@ -107,7 +107,7 @@ class AssignmentAvailabilityRulesTest {
         assertThatThrownBy(() -> assignmentService.assignTrip(new AssignmentCreateRequest(1L, 10L, 20L)))
                 .isInstanceOf(BusinessException.class)
                 .extracting("code").isEqualTo("DRIVER_INACTIVE");
-        verify(assignmentRepository, never()).isDriverAvailable(any(), any(), any(), any());
+        verify(assignmentRepository, never()).isDriverAvailableExcludingTrip(any(), any(), any(), any());
     }
 
     @Test
@@ -116,7 +116,7 @@ class AssignmentAvailabilityRulesTest {
         trip.setArrivalEta(null);
         when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
         when(userRepository.findById(10L)).thenReturn(Optional.of(driver));
-        when(assignmentRepository.isDriverAvailable(10L, trip.getTripDate(), trip.getDepartureTime(), trip.getDepartureTime()))
+        when(assignmentRepository.isDriverAvailableExcludingTrip(10L, 1L, trip.getDepartureTime(), trip.getDepartureTime()))
                 .thenReturn(false);
 
         // When/Then
@@ -126,14 +126,14 @@ class AssignmentAvailabilityRulesTest {
     }
 
     @Test
-    void shouldAssignTrip_WithAuthenticatedDispatcher_IgnoreDispatcherIdFromBody() {
-        // Given: el body trae otro dispatcherId (99) que no debe consultarse
+    void shouldAssignTrip_WithAuthenticatedDispatcherAndNoDispatcherId_UseTokenUser() {
+        // Given: el body no trae dispatcherId; el despachador sale del token
         authenticateAs("disp@test.com", "DISPATCHER");
         when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
         when(userRepository.findById(10L)).thenReturn(Optional.of(driver));
-        when(assignmentRepository.isDriverAvailable(any(), any(), any(), any())).thenReturn(true);
+        when(assignmentRepository.isDriverAvailableExcludingTrip(any(), any(), any(), any())).thenReturn(true);
         when(userRepository.findByEmail("disp@test.com")).thenReturn(Optional.of(dispatcher));
-        AssignmentCreateRequest request = new AssignmentCreateRequest(1L, 10L, 99L);
+        AssignmentCreateRequest request = new AssignmentCreateRequest(1L, 10L, null);
         when(assignmentMapper.toEntity(request)).thenReturn(new Assignment());
         when(assignmentRepository.save(any(Assignment.class))).thenAnswer(inv -> inv.getArgument(0));
 
@@ -142,7 +142,45 @@ class AssignmentAvailabilityRulesTest {
 
         // Then
         verify(assignmentRepository).save(argThat(a -> a.getDispatcher() == dispatcher));
+    }
+
+    @Test
+    void shouldAssignTrip_WithDispatcherIdDifferentFromToken_ThrowBadRequest() {
+        // Given: el body trae otro dispatcherId (99) distinto del despachador autenticado (20)
+        authenticateAs("disp@test.com", "DISPATCHER");
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+        when(userRepository.findById(10L)).thenReturn(Optional.of(driver));
+        when(assignmentRepository.isDriverAvailableExcludingTrip(any(), any(), any(), any())).thenReturn(true);
+        when(userRepository.findByEmail("disp@test.com")).thenReturn(Optional.of(dispatcher));
+
+        // When/Then
+        assertThatThrownBy(() -> assignmentService.assignTrip(new AssignmentCreateRequest(1L, 10L, 99L)))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    assertThat(((BusinessException) ex).getCode()).isEqualTo("DISPATCHER_MISMATCH");
+                    assertThat(((BusinessException) ex).getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+                });
         verify(userRepository, never()).findById(99L);
+        verify(assignmentRepository, never()).save(any());
+    }
+
+    @Test
+    void shouldAssignTrip_WithDispatcherIdEqualToToken_Assign() {
+        // Given
+        authenticateAs("disp@test.com", "DISPATCHER");
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+        when(userRepository.findById(10L)).thenReturn(Optional.of(driver));
+        when(assignmentRepository.isDriverAvailableExcludingTrip(any(), any(), any(), any())).thenReturn(true);
+        when(userRepository.findByEmail("disp@test.com")).thenReturn(Optional.of(dispatcher));
+        AssignmentCreateRequest request = new AssignmentCreateRequest(1L, 10L, 20L);
+        when(assignmentMapper.toEntity(request)).thenReturn(new Assignment());
+        when(assignmentRepository.save(any(Assignment.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        // When
+        assignmentService.assignTrip(request);
+
+        // Then
+        verify(assignmentRepository).save(argThat(a -> a.getDispatcher() == dispatcher));
     }
 
     @ParameterizedTest
@@ -167,7 +205,7 @@ class AssignmentAvailabilityRulesTest {
         Assignment assignment = Assignment.builder().id(5L).trip(trip).driver(driver).build();
         when(assignmentRepository.findById(5L)).thenReturn(Optional.of(assignment));
         when(userRepository.findById(11L)).thenReturn(Optional.of(other));
-        when(assignmentRepository.isDriverAvailable(any(), any(), any(), any())).thenReturn(false);
+        when(assignmentRepository.isDriverAvailableExcludingTrip(any(), any(), any(), any())).thenReturn(false);
 
         // When/Then
         assertThatThrownBy(() -> assignmentService.updateChecklist(5L, new AssignmentUpdateRequest(11L, null, null, null)))
@@ -187,6 +225,6 @@ class AssignmentAvailabilityRulesTest {
         assignmentService.updateChecklist(5L, new AssignmentUpdateRequest(10L, true, true, true));
 
         // Then
-        verify(assignmentRepository, never()).isDriverAvailable(any(), any(), any(), any());
+        verify(assignmentRepository, never()).isDriverAvailableExcludingTrip(any(), any(), any(), any());
     }
 }

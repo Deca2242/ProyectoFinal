@@ -29,7 +29,7 @@ public class DispatchController {
     private final OverbookingService overbookingService;
     private final BaggageSummaryService baggageSummaryService;
 
-    // Asigna un conductor y despachador a un viaje
+    // Asigna un conductor (y opcionalmente otro bus) a un viaje; el despachador es el usuario autenticado
     @PostMapping("/assign")
     @PreAuthorize("hasRole('DISPATCHER')")
     public ResponseEntity<AssignmentResponse> assignTrip(
@@ -46,20 +46,21 @@ public class DispatchController {
         AssignmentCreateRequest validatedRequest = new AssignmentCreateRequest(
                 tripId,
                 request.driverId(),
-                request.dispatcherId());
+                request.dispatcherId(),
+                request.busId());
 
         AssignmentResponse response = assignmentService.assignTrip(validatedRequest);
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
-    // Consulta la asignación (conductor, despachador y checklist) de un viaje
+    // Consulta la asignación (conductor, despachador y checklist con su vigencia); un DRIVER solo la de sus viajes
     @GetMapping("/assignment")
     @PreAuthorize("hasAnyRole('DISPATCHER', 'DRIVER')")
     public ResponseEntity<AssignmentResponse> getAssignment(@PathVariable Long tripId) {
         return ResponseEntity.ok(assignmentService.getAssignmentByTrip(tripId));
     }
 
-    // Actualiza el checklist de salida (checklist, SOAT, revisión técnica) o el conductor asignado
+    // Actualiza el checklist de salida (checklist, SOAT, revisión técnica), el conductor o el bus asignado
     @PutMapping("/assignment")
     @PreAuthorize("hasRole('DISPATCHER')")
     public ResponseEntity<AssignmentResponse> updateAssignment(
@@ -114,10 +115,11 @@ public class DispatchController {
         return ResponseEntity.ok(overbookingService.approveExtraSeat(tripId));
     }
 
-    // Conteo de equipaje del viaje (maletero / panel de despacho)
+    // Conteo de equipaje del viaje (maletero / panel de despacho); un DRIVER solo el de sus viajes
     @GetMapping("/baggage")
     @PreAuthorize("hasAnyRole('DISPATCHER', 'DRIVER', 'CLERK')")
     public ResponseEntity<TripBaggageSummaryResponse> getTripBaggage(@PathVariable Long tripId) {
+        assignmentService.requireAssignedDriver(tripId);
         return ResponseEntity.ok(baggageSummaryService.getTripBaggage(tripId));
     }
 }

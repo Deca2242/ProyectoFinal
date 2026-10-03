@@ -5,6 +5,7 @@ import lombok.*;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
@@ -36,6 +37,13 @@ public class Bus {
     @Column(nullable = false, length = 20)
     @Builder.Default
     private BusStatus status = BusStatus.ACTIVE;
+
+    // Vigencia del checklist (SOAT y revisión técnico-mecánica); NULL = se usan los booleanos de la asignación
+    @Column(name = "soat_expires_at")
+    private LocalDate soatExpiresAt;
+
+    @Column(name = "technical_review_expires_at")
+    private LocalDate technicalReviewExpiresAt;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     @Builder.Default

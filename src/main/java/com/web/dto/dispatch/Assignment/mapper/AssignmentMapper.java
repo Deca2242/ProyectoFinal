@@ -23,6 +23,10 @@ public interface AssignmentMapper {
     @Mapping(target = "departureTime", source = "trip.departureTime")
     @Mapping(target = "arrivalEta", source = "trip.arrivalEta")
     @Mapping(target = "busPlate", source = "trip.bus.plate")
+    @Mapping(target = "soatExpiresAt", source = "trip.bus.soatExpiresAt")
+    @Mapping(target = "technicalReviewExpiresAt", source = "trip.bus.technicalReviewExpiresAt")
+    @Mapping(target = "soatValidOnTripDate", expression = "java(assignment.soatValidOnTripDate())")
+    @Mapping(target = "reviewValidOnTripDate", expression = "java(assignment.reviewValidOnTripDate())")
     AssignmentResponse toResponse(Assignment assignment);
     
     List<AssignmentResponse> toResponseList(List<Assignment> assignments);

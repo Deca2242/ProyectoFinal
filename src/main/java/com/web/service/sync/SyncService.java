@@ -13,5 +13,9 @@ public interface SyncService {
 
     SyncBatchResponse syncBoardings(BoardingSyncRequest request);
 
-    List<SyncConflictResponse> getConflicts(String deviceId);
+    // Abiertos (resolved = false) o ya revisados (resolved = true)
+    List<SyncConflictResponse> getConflicts(String deviceId, boolean resolved);
+
+    // Marca un conflicto como revisado por el usuario autenticado
+    SyncConflictResponse resolveConflict(Long conflictId);
 }
