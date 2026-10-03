@@ -15,11 +15,83 @@ public interface TripRepository extends JpaRepository<Trip, Long> {
     // Buscar viajes disponibles por ruta y fecha
     List<Trip> findByRouteIdAndTripDate(Long routeId, LocalDate tripDate);
 
-    // Buscar viajes por ruta, fecha y estado específico
-    List<Trip> findByRouteIdAndTripDateAndStatus(Long routeId, LocalDate tripDate, Trip.TripStatus status);
+    // Búsqueda pública de salidas: filtros opcionales por ruta y fecha (COALESCE en lugar de ":p IS NULL" porque
+    // PostgreSQL no infiere el tipo de un parámetro de fecha nulo). Sin includeAll solo devuelve
+    // las salidas reservables (SCHEDULED/BOARDING con salida futura)
+    @Query("""
+        SELECT t FROM Trip t
+        JOIN FETCH t.route
+        JOIN FETCH t.bus
+        WHERE t.route.id = COALESCE(:routeId, t.route.id)
+        AND t.tripDate = COALESCE(:date, t.tripDate)
+        AND (:includeAll = true
+             OR (t.status IN ('SCHEDULED', 'BOARDING') AND t.departureTime > :now))
+        ORDER BY t.departureTime
+    """)
+    List<Trip> searchTrips(
+        @Param("routeId") Long routeId,
+        @Param("date") LocalDate date,
+        @Param("includeAll") boolean includeAll,
+        @Param("now") LocalDateTime now
+    );
 
-    // Contar viajes futuros de una ruta
-    long countByRouteIdAndTripDateGreaterThanEqual(Long routeId, LocalDate date);
+    // Viajes pendientes (SCHEDULED/BOARDING con salida futura) de una ruta: impiden desactivarla
+    @Query("""
+        SELECT COUNT(t) FROM Trip t
+        WHERE t.route.id = :routeId
+        AND t.status IN ('SCHEDULED', 'BOARDING')
+        AND t.departureTime > :now
+    """)
+    long countPendingTripsByRoute(@Param("routeId") Long routeId, @Param("now") LocalDateTime now);
+
+    // Viajes pendientes (SCHEDULED/BOARDING con salida futura) de un bus: impiden retirarlo o mandarlo a mantenimiento
+    @Query("""
+        SELECT CASE WHEN COUNT(t) > 0 THEN true ELSE false END FROM Trip t
+        WHERE t.bus.id = :busId
+        AND t.status IN ('SCHEDULED', 'BOARDING')
+        AND t.departureTime > :now
+    """)
+    boolean existsPendingTripsByBus(@Param("busId") Long busId, @Param("now") LocalDateTime now);
+
+    // El bus ya tiene otro viaje activo (no cancelado ni llegado) que se solapa con la franja [departure, arrival).
+    // excludeTripId permite ignorar el propio viaje al reprogramarlo (null al crear)
+    @Query("""
+        SELECT CASE WHEN COUNT(t) > 0 THEN true ELSE false END FROM Trip t
+        WHERE t.bus.id = :busId
+        AND t.status NOT IN ('CANCELLED', 'ARRIVED')
+        AND (:excludeTripId IS NULL OR t.id <> :excludeTripId)
+        AND t.departureTime < :arrival
+        AND t.arrivalEta > :departure
+    """)
+    boolean existsOverlappingTripForBus(
+        @Param("busId") Long busId,
+        @Param("departure") LocalDateTime departure,
+        @Param("arrival") LocalDateTime arrival,
+        @Param("excludeTripId") Long excludeTripId
+    );
+
+    // IDs de buses con algún viaje activo (no cancelado ni llegado) que se solapa con la franja (disponibilidad de flota)
+    @Query("""
+        SELECT DISTINCT t.bus.id FROM Trip t
+        WHERE t.status NOT IN ('CANCELLED', 'ARRIVED')
+        AND t.departureTime < :arrival
+        AND t.arrivalEta > :departure
+    """)
+    List<Long> findBusIdsWithOverlappingTrips(
+        @Param("departure") LocalDateTime departure,
+        @Param("arrival") LocalDateTime arrival
+    );
+
+    // Silla vendida más alta del bus en viajes futuros no cancelados (null si no hay): límite para bajar la capacidad
+    @Query("""
+        SELECT MAX(tk.seatNumber) FROM Ticket tk
+        JOIN tk.trip t
+        WHERE t.bus.id = :busId
+        AND tk.status = 'SOLD'
+        AND t.status <> 'CANCELLED'
+        AND t.departureTime > :now
+    """)
+    Integer findMaxSoldSeatNumberInFutureTrips(@Param("busId") Long busId, @Param("now") LocalDateTime now);
 
     // Buscar viajes por estado
     List<Trip> findByStatus(Trip.TripStatus status);
@@ -56,24 +128,6 @@ public interface TripRepository extends JpaRepository<Trip, Long> {
         GROUP BY b.capacity
     """)
     Double getOccupancyPercentage(@Param("tripId") Long tripId);
-
-    // Obtener cantidad de asientos disponibles para un tramo específico
-    @Query("""
-        SELECT COALESCE(b.capacity - COUNT(DISTINCT t.seatNumber), b.capacity)
-        FROM Bus b
-        LEFT JOIN Trip tr ON b.id = tr.bus.id
-        LEFT JOIN Ticket t ON tr.id = t.trip.id
-            AND t.status = 'SOLD'
-            AND t.fromStop.order < :toStopOrder
-            AND t.toStop.order > :fromStopOrder
-        WHERE tr.id = :tripId
-        GROUP BY b.capacity
-    """)
-    Long getAvailableSeatsForSegment(
-        @Param("tripId") Long tripId,
-        @Param("fromStopOrder") Integer fromStopOrder,
-        @Param("toStopOrder") Integer toStopOrder
-    );
 
     // Buscar viajes sin asignación (para despachador)
     @Query("""
@@ -126,11 +180,11 @@ public interface TripRepository extends JpaRepository<Trip, Long> {
         @Param("endDate") LocalDate endDate
     );
 
-    // IDs de buses que ya tienen un viaje no cancelado en la fecha (para disponibilidad de flota)
+    // IDs de buses con un viaje activo (no cancelado ni llegado) en la fecha (disponibilidad de flota por día)
     @Query("""
                 SELECT DISTINCT t.bus.id FROM Trip t
                 WHERE t.tripDate = :date
-                AND t.status <> 'CANCELLED'
+                AND t.status NOT IN ('CANCELLED', 'ARRIVED')
             """)
     List<Long> findBusIdsWithTripsOnDate(@Param("date") LocalDate date);
 

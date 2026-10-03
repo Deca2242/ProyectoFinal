@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.web.config.CustomUserDetailsService;
 import com.web.config.JwtAuthenticationFilter;
 import com.web.controller.TripController;
+import com.web.dto.trip.SeatAvailabilityResponse;
 import com.web.dto.trip.SeatStatusResponse;
 import com.web.dto.trip.TripDetailResponse;
 import com.web.entity.Trip;
@@ -53,23 +54,25 @@ class DispatcherOccupancyTest {
     void getSeatAvailability_shouldReturnOccupancyBySegment() throws Exception {
         // Given: Ocupación por tramo específico
         var seats = List.of(
-                new SeatStatusResponse(1, true, "AVAILABLE"),
-                new SeatStatusResponse(2, false, "OCCUPIED"),
-                new SeatStatusResponse(3, false, "OCCUPIED"),
-                new SeatStatusResponse(4, true, "AVAILABLE")
+                new SeatStatusResponse(1, true, "AVAILABLE", "STANDARD"),
+                new SeatStatusResponse(2, false, "OCCUPIED", "STANDARD"),
+                new SeatStatusResponse(3, false, "OCCUPIED", "STANDARD"),
+                new SeatStatusResponse(4, true, "AVAILABLE", "STANDARD")
         );
 
-        when(tripService.getSeatAvailability(1L, 1L, 2L)).thenReturn(seats);
+        when(tripService.getSeatAvailability(1L, 1L, 2L))
+                .thenReturn(new SeatAvailabilityResponse(1L, 1L, 2L, 4, 2, seats));
 
         // When & Then
         mvc.perform(get("/api/v1/trips/1/seats")
                         .param("fromStopId", "1")
                         .param("toStopId", "2"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$[0].available").value(true))
-                .andExpect(jsonPath("$[1].available").value(false))
-                .andExpect(jsonPath("$[2].available").value(false))
-                .andExpect(jsonPath("$[3].available").value(true));
+                .andExpect(jsonPath("$.availableSeats").value(2))
+                .andExpect(jsonPath("$.seats[0].available").value(true))
+                .andExpect(jsonPath("$.seats[1].available").value(false))
+                .andExpect(jsonPath("$.seats[2].available").value(false))
+                .andExpect(jsonPath("$.seats[3].available").value(true));
     }
 
     // Verifica que el detalle incluya porcentaje de ocupación
@@ -81,7 +84,7 @@ class DispatcherOccupancyTest {
         var detail = new TripDetailResponse(
                 1L, null, busResponse,
                 LocalDate.now().plusDays(1), LocalDateTime.now().plusDays(1).plusHours(8), null,
-                Trip.TripStatus.SCHEDULED, null, 30, 10, 75.0, List.of()
+                Trip.TripStatus.SCHEDULED, null, 30, 10, 75.0, List.of(), null, null, null
         );
 
         when(tripService.getTripById(1L)).thenReturn(detail);
@@ -101,34 +104,36 @@ class DispatcherOccupancyTest {
     void monitorMultipleSegments_shouldShowDifferentOccupancy() throws Exception {
         // Given: Diferentes tramos con ocupación diferente
         var segment1 = List.of(
-                new SeatStatusResponse(1, false, "OCCUPIED"),
-                new SeatStatusResponse(2, false, "OCCUPIED"),
-                new SeatStatusResponse(3, true, "AVAILABLE")
+                new SeatStatusResponse(1, false, "OCCUPIED", "STANDARD"),
+                new SeatStatusResponse(2, false, "OCCUPIED", "STANDARD"),
+                new SeatStatusResponse(3, true, "AVAILABLE", "STANDARD")
         );
         var segment2 = List.of(
-                new SeatStatusResponse(1, true, "AVAILABLE"),
-                new SeatStatusResponse(2, true, "AVAILABLE"),
-                new SeatStatusResponse(3, true, "AVAILABLE")
+                new SeatStatusResponse(1, true, "AVAILABLE", "STANDARD"),
+                new SeatStatusResponse(2, true, "AVAILABLE", "STANDARD"),
+                new SeatStatusResponse(3, true, "AVAILABLE", "STANDARD")
         );
 
-        when(tripService.getSeatAvailability(1L, 1L, 2L)).thenReturn(segment1);
-        when(tripService.getSeatAvailability(1L, 2L, 3L)).thenReturn(segment2);
+        when(tripService.getSeatAvailability(1L, 1L, 2L))
+                .thenReturn(new SeatAvailabilityResponse(1L, 1L, 2L, 3, 1, segment1));
+        when(tripService.getSeatAvailability(1L, 2L, 3L))
+                .thenReturn(new SeatAvailabilityResponse(1L, 2L, 3L, 3, 3, segment2));
 
         // When & Then: Segmento 1 tiene mayor ocupación
         mvc.perform(get("/api/v1/trips/1/seats")
                         .param("fromStopId", "1")
                         .param("toStopId", "2"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$[0].available").value(false))
-                .andExpect(jsonPath("$[1].available").value(false));
+                .andExpect(jsonPath("$.seats[0].available").value(false))
+                .andExpect(jsonPath("$.seats[1].available").value(false));
 
         // Segmento 2 tiene menor ocupación
         mvc.perform(get("/api/v1/trips/1/seats")
                         .param("fromStopId", "2")
                         .param("toStopId", "3"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$[0].available").value(true))
-                .andExpect(jsonPath("$[1].available").value(true));
+                .andExpect(jsonPath("$.seats[0].available").value(true))
+                .andExpect(jsonPath("$.seats[1].available").value(true));
     }
 }
 

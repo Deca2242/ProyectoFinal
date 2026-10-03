@@ -168,7 +168,7 @@ class DriverBoardingTest {
                 1L, 1L, "Bogotá - Medellín", "Bogotá", "Medellín",
                 1L, "ABC123", 40,
                 LocalDate.now().plusDays(1), LocalDateTime.now().plusDays(1).plusHours(8), null,
-                Trip.TripStatus.BOARDING, 25, 62.5
+                Trip.TripStatus.BOARDING, 25, 62.5, null, null, null, null
         );
 
         when(boardingService.openBoarding(1L)).thenReturn(tripResponse);

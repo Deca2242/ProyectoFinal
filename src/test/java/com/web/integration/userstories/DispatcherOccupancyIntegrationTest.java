@@ -5,6 +5,7 @@ import com.web.dto.auth.Login.LoginRequest;
 import com.web.dto.auth.Login.LoginResponse;
 import com.web.dto.auth.Login.RegisterRequest;
 import com.web.dto.ticket.TicketCreateRequest;
+import com.web.dto.trip.SeatAvailabilityResponse;
 import com.web.dto.trip.SeatStatusResponse;
 import com.web.dto.trip.TripDetailResponse;
 import com.web.entity.Bus;
@@ -214,9 +215,7 @@ class DispatcherOccupancyIntegrationTest extends BaseIntegrationTest {
                 .andReturn();
 
         List<SeatStatusResponse> initialSeats = om.readValue(
-                initialSeatsResult.getResponse().getContentAsString(),
-                om.getTypeFactory().constructCollectionType(List.class, SeatStatusResponse.class)
-        );
+                initialSeatsResult.getResponse().getContentAsString(), SeatAvailabilityResponse.class).seats();
 
         long initialOccupied = initialSeats.stream()
                 .filter(seat -> !seat.available())
@@ -249,9 +248,7 @@ class DispatcherOccupancyIntegrationTest extends BaseIntegrationTest {
                 .andReturn();
 
         List<SeatStatusResponse> afterSeats = om.readValue(
-                afterSeatsResult.getResponse().getContentAsString(),
-                om.getTypeFactory().constructCollectionType(List.class, SeatStatusResponse.class)
-        );
+                afterSeatsResult.getResponse().getContentAsString(), SeatAvailabilityResponse.class).seats();
 
         long afterOccupied = afterSeats.stream()
                 .filter(seat -> !seat.available())
@@ -299,9 +296,7 @@ class DispatcherOccupancyIntegrationTest extends BaseIntegrationTest {
                 .andReturn();
 
         List<SeatStatusResponse> seats = om.readValue(
-                seatsResult.getResponse().getContentAsString(),
-                om.getTypeFactory().constructCollectionType(List.class, SeatStatusResponse.class)
-        );
+                seatsResult.getResponse().getContentAsString(), SeatAvailabilityResponse.class).seats();
 
         long occupied = seats.stream()
                 .filter(seat -> !seat.available())

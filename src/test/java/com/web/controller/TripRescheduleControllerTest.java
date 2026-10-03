@@ -63,7 +63,7 @@ class TripRescheduleControllerTest {
     @WithMockUser(roles = "ADMIN")
     void rescheduleTrip_shouldReturn200() throws Exception {
         var resp = new TripResponse(1L, 1L, "Ruta", "A", "B", 2L, "XYZ789", 30,
-                DEPARTURE.toLocalDate(), DEPARTURE, DEPARTURE.plusHours(4), Trip.TripStatus.SCHEDULED, null, null);
+                DEPARTURE.toLocalDate(), DEPARTURE, DEPARTURE.plusHours(4), Trip.TripStatus.SCHEDULED, null, null, null, null, null, null);
         when(tripService.rescheduleTrip(eq(1L), any(TripUpdateRequest.class))).thenReturn(resp);
 
         mvc.perform(put("/api/v1/trips/1").contentType(MediaType.APPLICATION_JSON).content(body()))

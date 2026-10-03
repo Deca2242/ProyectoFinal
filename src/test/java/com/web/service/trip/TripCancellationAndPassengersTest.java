@@ -9,6 +9,7 @@ import com.web.entity.Stop;
 import com.web.entity.Ticket;
 import com.web.entity.Trip;
 import com.web.exception.BusinessException;
+import com.web.exception.InvalidStateTransitionException;
 import com.web.repository.BusRepository;
 import com.web.repository.RouteRepository;
 import com.web.repository.SeatHoldRepository;
@@ -18,9 +19,12 @@ import com.web.repository.TripRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpStatus;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -100,28 +104,20 @@ class TripCancellationAndPassengersTest {
         verify(tripRepository).save(trip);
     }
 
-    @Test
-    void shouldCancelTrip_WithAlreadyCancelled_ThrowInvalidCancel() {
+    @ParameterizedTest
+    @EnumSource(value = Trip.TripStatus.class, names = {"DEPARTED", "ARRIVED", "CANCELLED"})
+    void shouldCancelTrip_WithDepartedArrivedOrCancelled_ThrowInvalidStateTransition(Trip.TripStatus status) {
         // Given
-        trip.setStatus(Trip.TripStatus.CANCELLED);
+        trip.setStatus(status);
         when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
 
-        // When/Then
+        // When/Then: estado inválido para la transición (422), sin tocar tickets ni holds
         assertThatThrownBy(() -> tripService.cancelTrip(1L))
-                .isInstanceOf(BusinessException.class)
-                .extracting("code").isEqualTo("INVALID_CANCEL");
+                .isInstanceOf(InvalidStateTransitionException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getStatus())
+                        .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY));
         verifyNoInteractions(ticketRepository, seatHoldRepository);
-    }
-
-    @Test
-    void shouldCancelTrip_WithDepartedTrip_NotTouchTickets() {
-        // Given
-        trip.setStatus(Trip.TripStatus.DEPARTED);
-        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
-
-        // When/Then
-        assertThatThrownBy(() -> tripService.cancelTrip(1L)).isInstanceOf(BusinessException.class);
-        verifyNoInteractions(ticketRepository, seatHoldRepository);
+        verify(tripRepository, never()).save(any());
     }
 
     @Test

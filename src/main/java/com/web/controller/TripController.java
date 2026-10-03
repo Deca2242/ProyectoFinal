@@ -1,7 +1,8 @@
 package com.web.controller;
 
 import com.web.dto.ticket.TicketResponse;
-import com.web.dto.trip.SeatStatusResponse;
+import com.web.dto.trip.SeatAvailabilityResponse;
+import com.web.dto.trip.SegmentOccupancyResponse;
 import com.web.dto.trip.TripCreateRequest;
 import com.web.dto.trip.TripDetailResponse;
 import com.web.dto.trip.TripResponse;
@@ -29,17 +30,19 @@ public class TripController {
 
     // Endpoints públicos (consulta)
 
+    // Salidas disponibles (SCHEDULED/BOARDING con salida futura); includeAll=true solo aplica a ADMIN/DISPATCHER
     @GetMapping
     public ResponseEntity<List<TripResponse>> searchTrips(
             @RequestParam(required = false) Long routeId,
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date) {
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
+            @RequestParam(defaultValue = "false") boolean includeAll) {
 
         if (routeId == null && date == null) {
             throw new BusinessException("Debe proporcionar al menos routeId o date",
                     HttpStatus.BAD_REQUEST, "MISSING_SEARCH_PARAMS");
         }
 
-        return ResponseEntity.ok(tripService.searchTrips(routeId, date));
+        return ResponseEntity.ok(tripService.searchTrips(routeId, date, includeAll));
     }
 
     @GetMapping("/{id}")
@@ -48,11 +51,18 @@ public class TripController {
     }
 
     @GetMapping("/{id}/seats")
-    public ResponseEntity<List<SeatStatusResponse>> getSeatAvailability(
+    public ResponseEntity<SeatAvailabilityResponse> getSeatAvailability(
             @PathVariable Long id,
             @RequestParam Long fromStopId,
             @RequestParam Long toStopId) {
         return ResponseEntity.ok(tripService.getSeatAvailability(id, fromStopId, toStopId));
+    }
+
+    // Ocupación en tiempo real por tramos consecutivos de la ruta
+    @GetMapping("/{id}/occupancy")
+    @PreAuthorize("hasAnyRole('DISPATCHER', 'ADMIN')")
+    public ResponseEntity<List<SegmentOccupancyResponse>> getOccupancyBySegment(@PathVariable Long id) {
+        return ResponseEntity.ok(tripService.getOccupancyBySegment(id));
     }
 
     @GetMapping("/{tripId}/passengers")

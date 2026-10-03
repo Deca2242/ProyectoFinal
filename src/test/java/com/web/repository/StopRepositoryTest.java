@@ -7,11 +7,14 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.orm.jpa.TestEntityManager;
+import org.springframework.dao.DataIntegrityViolationException;
 
 import java.math.BigDecimal;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.tuple;
 
 
 @DisplayName("StopRepository Integration Tests")
@@ -195,5 +198,39 @@ class StopRepositoryTest extends BaseRepositoryTest {
 
         // Then
         assertThat(stops).isEmpty();
+    }
+
+    @Test
+    @DisplayName("La BD rechaza dos paradas con el mismo orden en una ruta (UNIQUE route_id, stop_order)")
+    void shouldRejectDuplicateStopOrderInSameRoute() {
+        // Given - otra parada con el orden 2 en la misma ruta
+        Stop duplicated = Stop.builder()
+                .route(route)
+                .name("Terminal Duplicada")
+                .order(2)
+                .build();
+
+        // When/Then
+        assertThatThrownBy(() -> stopRepository.saveAndFlush(duplicated))
+                .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    @DisplayName("Debe correr una posición el orden de las paradas siguientes a la eliminada")
+    void shouldShiftOrdersAfterRemovedStop() {
+        // Given - se elimina la parada 1; la restricción única es diferible y admite el corrimiento en bloque
+        stopRepository.delete(stopBogota);
+
+        // When
+        int shifted = stopRepository.shiftOrdersAfter(route.getId(), 1);
+
+        // Then
+        assertThat(shifted).isEqualTo(2);
+        assertThat(stopRepository.findByRouteIdOrderByOrderAsc(route.getId()))
+                .extracting(Stop::getName, Stop::getOrder)
+                .containsExactly(
+                        tuple("Terminal Tunja", 1),
+                        tuple("Terminal Bucaramanga", 2));
+        assertThat(stopRepository.countByRouteId(route.getId())).isEqualTo(2L);
     }
 }

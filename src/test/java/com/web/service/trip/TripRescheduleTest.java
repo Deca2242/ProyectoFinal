@@ -95,7 +95,7 @@ class TripRescheduleTest {
                 .departureTime(DEPARTURE).arrivalEta(ARRIVAL)
                 .status(Trip.TripStatus.SCHEDULED).overbookingApprovedSeats(0).build();
         response = new TripResponse(1L, 1L, "Santa Marta - Barranquilla", null, null, 1L, "ABC123", 40,
-                TRIP_DATE, DEPARTURE, ARRIVAL, Trip.TripStatus.SCHEDULED, null, null);
+                TRIP_DATE, DEPARTURE, ARRIVAL, Trip.TripStatus.SCHEDULED, null, null, null, null, null, null);
     }
 
     private Ticket soldTicket(int seat) {
@@ -207,14 +207,34 @@ class TripRescheduleTest {
                 .extracting("code").isEqualTo("BUS_NOT_AVAILABLE");
     }
 
-    // ---------- Bus libre ese día ----------
+    @Test
+    void shouldReschedule_WithOnlyBusOnTripAlreadyDeparted_ThrowInvalidDates() {
+        // Given: la salida del viaje ya pasó y solo se pide cambiar el bus
+        LocalDateTime pastDeparture = LocalDateTime.now().minusHours(2);
+        trip.setDepartureTime(pastDeparture);
+        trip.setArrivalEta(pastDeparture.plusHours(4));
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+
+        // When/Then
+        assertThatThrownBy(() -> tripService.rescheduleTrip(1L, new TripUpdateRequest(null, null, 2L)))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    BusinessException be = (BusinessException) ex;
+                    assertThat(be.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+                    assertThat(be.getCode()).isEqualTo("INVALID_DATES");
+                });
+        verifyNoInteractions(busRepository);
+        verify(tripRepository, never()).save(any());
+    }
+
+    // ---------- Bus libre en la franja horaria ----------
 
     @Test
-    void shouldReschedule_WithNewBusBusyThatDay_ThrowConflict() {
+    void shouldReschedule_WithNewBusOverlappingTrip_ThrowConflict() {
         // Given
         when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
         when(busRepository.findById(2L)).thenReturn(Optional.of(otherBus));
-        when(tripRepository.findBusIdsWithTripsOnDate(TRIP_DATE)).thenReturn(List.of(1L, 2L));
+        when(tripRepository.existsOverlappingTripForBus(2L, DEPARTURE, ARRIVAL, 1L)).thenReturn(true);
 
         // When/Then
         assertThatThrownBy(() -> tripService.rescheduleTrip(1L, new TripUpdateRequest(null, null, 2L)))
@@ -228,11 +248,11 @@ class TripRescheduleTest {
     }
 
     @Test
-    void shouldReschedule_WithSameBusMovedToBusyDay_ThrowConflict() {
-        // Given: el mismo bus ya tiene otro viaje el nuevo día
+    void shouldReschedule_WithSameBusMovedToOverlappingSlot_ThrowConflict() {
+        // Given: el mismo bus ya tiene otro viaje que se solapa con la nueva franja
         LocalDateTime newDeparture = DEPARTURE.plusDays(1);
         when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
-        when(tripRepository.findBusIdsWithTripsOnDate(TRIP_DATE.plusDays(1))).thenReturn(List.of(1L));
+        when(tripRepository.existsOverlappingTripForBus(1L, newDeparture, newDeparture.plusHours(4), 1L)).thenReturn(true);
 
         // When/Then
         assertThatThrownBy(() -> tripService.rescheduleTrip(1L,
@@ -242,7 +262,7 @@ class TripRescheduleTest {
     }
 
     @Test
-    void shouldReschedule_WithSameBusAndSameDay_NotCheckOwnTripAsBusy() {
+    void shouldReschedule_WithSameBusAndSameDay_ExcludeOwnTripFromOverlap() {
         // Given: solo cambia la hora; el propio viaje no cuenta como conflicto
         LocalDateTime newDeparture = DEPARTURE.plusHours(2);
         when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
@@ -255,7 +275,7 @@ class TripRescheduleTest {
 
         // Then
         assertThat(result).isSameAs(response);
-        verify(tripRepository, never()).findBusIdsWithTripsOnDate(any());
+        verify(tripRepository).existsOverlappingTripForBus(1L, newDeparture, ARRIVAL.plusHours(2), 1L);
         verify(tripMapper).updateEntityFromRequest(request, trip);
         assertThat(trip.getTripDate()).isEqualTo(TRIP_DATE);
         assertThat(trip.getBus()).isSameAs(bus);
@@ -266,7 +286,6 @@ class TripRescheduleTest {
         // Given
         LocalDateTime newDeparture = DEPARTURE.plusDays(2);
         when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
-        when(tripRepository.findBusIdsWithTripsOnDate(TRIP_DATE.plusDays(2))).thenReturn(List.of(5L));
         when(tripRepository.save(trip)).thenReturn(trip);
         when(tripMapper.toResponse(trip)).thenReturn(response);
 
@@ -285,7 +304,6 @@ class TripRescheduleTest {
         // Given: el bus nuevo tiene 30 sillas y hay un tiquete en la 35
         when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
         when(busRepository.findById(2L)).thenReturn(Optional.of(otherBus));
-        when(tripRepository.findBusIdsWithTripsOnDate(TRIP_DATE)).thenReturn(List.of(1L));
         when(ticketRepository.findByTripIdAndStatus(1L, Ticket.TicketStatus.SOLD))
                 .thenReturn(List.of(soldTicket(5), soldTicket(35)));
 
@@ -306,7 +324,6 @@ class TripRescheduleTest {
         trip.setOverbookingApprovedSeats(2);
         when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
         when(busRepository.findById(2L)).thenReturn(Optional.of(otherBus));
-        when(tripRepository.findBusIdsWithTripsOnDate(TRIP_DATE)).thenReturn(List.of(1L));
         when(ticketRepository.findByTripIdAndStatus(1L, Ticket.TicketStatus.SOLD))
                 .thenReturn(List.of(soldTicket(30), soldTicket(32)));
         when(tripRepository.save(trip)).thenReturn(trip);
@@ -331,9 +348,9 @@ class TripRescheduleTest {
         // When
         tripService.rescheduleTrip(1L, new TripUpdateRequest(null, ARRIVAL.plusMinutes(30), 1L));
 
-        // Then: busId igual al actual no consulta los tiquetes ni la disponibilidad
+        // Then: busId igual al actual no consulta los tiquetes; la franja nueva se valida excluyendo el propio viaje
         verifyNoInteractions(ticketRepository);
-        verify(tripRepository, never()).findBusIdsWithTripsOnDate(any());
+        verify(tripRepository).existsOverlappingTripForBus(1L, DEPARTURE, ARRIVAL.plusMinutes(30), 1L);
     }
 
     // ---------- Conductor asignado, holds huérfanos y aviso a pasajeros ----------

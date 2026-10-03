@@ -21,8 +21,12 @@ import com.web.dto.catalog.Route.RouteResponse;
 import com.web.dto.catalog.Route.RouteUpdateRequest;
 import com.web.dto.catalog.Route.mapper.RouteMapper;
 import com.web.dto.catalog.Route.mapper.RouteMapperImpl;
+import com.web.dto.catalog.Seat.SeatResponse;
+import com.web.dto.catalog.Seat.mapper.SeatMapper;
+import com.web.dto.catalog.Seat.mapper.SeatMapperImpl;
 import com.web.dto.catalog.Stop.StopCreateRequest;
 import com.web.dto.catalog.Stop.StopResponse;
+import com.web.dto.catalog.Stop.StopUpdateRequest;
 import com.web.dto.catalog.Stop.mapper.StopMapper;
 import com.web.dto.catalog.Stop.mapper.StopMapperImpl;
 import com.web.dto.dispatch.Assignment.AssignmentCreateRequest;
@@ -56,6 +60,7 @@ import com.web.entity.Baggage;
 import com.web.entity.Bus;
 import com.web.entity.Parcel;
 import com.web.entity.Route;
+import com.web.entity.Seat;
 import com.web.entity.SeatHold;
 import com.web.entity.Stop;
 import com.web.entity.Ticket;
@@ -64,6 +69,8 @@ import com.web.entity.User;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import com.web.repository.TicketRepository;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
 
 import java.math.BigDecimal;
@@ -74,13 +81,14 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.when;
 
 // Pruebas de las implementaciones generadas por MapStruct, cargadas en un contexto Spring mínimo
 // para que las dependencias entre mappers (uses = {...}) se inyecten igual que en producción
 @SpringJUnitConfig(classes = {
         UserMapperImpl.class, BusMapperImpl.class, StopMapperImpl.class, RouteMapperImpl.class,
         BaggageMapperImpl.class, TicketMapperImpl.class, AssignmentMapperImpl.class, TripMapperImpl.class,
-        ParcelMapperImpl.class, SeatHoldMapperImpl.class, PaymentMapperImpl.class
+        ParcelMapperImpl.class, SeatHoldMapperImpl.class, PaymentMapperImpl.class, SeatMapperImpl.class
 })
 class MapperTest {
 
@@ -106,6 +114,12 @@ class MapperTest {
     private SeatHoldMapper seatHoldMapper;
     @Autowired
     private PaymentMapper paymentMapper;
+    @Autowired
+    private SeatMapper seatMapper;
+
+    // TripMapper calcula la ocupación con los tickets vendidos
+    @MockitoBean
+    private TicketRepository ticketRepository;
 
     private static final LocalDateTime CREATED_AT = LocalDateTime.of(2025, 1, 10, 8, 30);
     private static final LocalDate TRIP_DATE = LocalDate.of(2025, 2, 1);
@@ -470,7 +484,7 @@ class MapperTest {
     @Test
     void routeMapper_ShouldUpdateOnlyNonNullFields_AndKeepImmutableOnes() {
         // Given
-        RouteUpdateRequest request = new RouteUpdateRequest(null, null, 160, false);
+        RouteUpdateRequest request = new RouteUpdateRequest(null, null, null, null, 160, false);
 
         // When
         routeMapper.updateEntityFromRequest(request, route);
@@ -484,6 +498,45 @@ class MapperTest {
         assertThat(route.getOrigin()).isEqualTo("Santa Marta");
         assertThat(route.getDestination()).isEqualTo("Barranquilla");
         assertThat(route.getStops()).hasSize(2);
+    }
+
+    @Test
+    void routeMapper_ShouldUpdateOriginAndDestination() {
+        // Given
+        RouteUpdateRequest request = new RouteUpdateRequest(null, "Ciénaga", "Soledad", null, null, null);
+
+        // When
+        routeMapper.updateEntityFromRequest(request, route);
+
+        // Then
+        assertThat(route.getOrigin()).isEqualTo("Ciénaga");
+        assertThat(route.getDestination()).isEqualTo("Soledad");
+        assertThat(route.getCode()).isEqualTo("SM-BAQ");
+    }
+
+    @Test
+    void stopMapper_ShouldUpdateNameAndCoordinates_KeepingOrderAndRoute() {
+        // When
+        stopMapper.updateEntityFromRequest(new StopUpdateRequest("Nueva", null, new BigDecimal("-74.5")), fromStop);
+
+        // Then
+        assertThat(fromStop.getName()).isEqualTo("Nueva");
+        assertThat(fromStop.getLongitude()).isEqualByComparingTo("-74.5");
+        assertThat(fromStop.getLatitude()).isNotNull();
+        assertThat(fromStop.getOrder()).isEqualTo(1);
+        assertThat(fromStop.getRoute()).isSameAs(route);
+    }
+
+    @Test
+    void seatMapper_ShouldMapEntityToResponse_WithBusId() {
+        // Given
+        Seat seat = Seat.builder().id(7L).bus(bus).seatNumber(3).seatType(Seat.SeatType.PREFERENTIAL).build();
+
+        // When
+        SeatResponse response = seatMapper.toResponse(seat);
+
+        // Then
+        assertThat(response).isEqualTo(new SeatResponse(7L, 5L, 3, Seat.SeatType.PREFERENTIAL));
     }
 
     // ==================== BaggageMapper ====================
@@ -788,6 +841,11 @@ class MapperTest {
 
     @Test
     void tripMapper_ShouldMapEntityToResponse_WithRouteAndBusInfo() {
+        // Given: 10 sillas vendidas en un bus de 40, con andén y hora real de salida
+        when(ticketRepository.countSoldSeats(50L)).thenReturn(10L);
+        trip.setPlatform("A3");
+        trip.setDepartedAt(DEPARTURE.plusMinutes(5));
+
         // When
         TripResponse response = tripMapper.toResponse(trip);
 
@@ -804,9 +862,30 @@ class MapperTest {
         assertThat(response.departureTime()).isEqualTo(DEPARTURE);
         assertThat(response.arrivalEta()).isEqualTo(ARRIVAL);
         assertThat(response.status()).isEqualTo(Trip.TripStatus.BOARDING);
-        // Los campos calculados los completa el servicio
-        assertThat(response.soldSeats()).isNull();
-        assertThat(response.occupancyPercentage()).isNull();
+        // Ocupación calculada en el mapper
+        assertThat(response.soldSeats()).isEqualTo(10);
+        assertThat(response.availableSeats()).isEqualTo(30);
+        assertThat(response.occupancyPercentage()).isEqualTo(25.0);
+        assertThat(response.platform()).isEqualTo("A3");
+        assertThat(response.departedAt()).isEqualTo(DEPARTURE.plusMinutes(5));
+        assertThat(response.arrivedAt()).isNull();
+    }
+
+    @Test
+    void tripMapper_ShouldCountApprovedOverbooking_AndNeverReturnNegativeAvailableSeats() {
+        // Given: 2 sillas de overbooking aprobadas
+        trip.setOverbookingApprovedSeats(2);
+        when(ticketRepository.countSoldSeats(50L)).thenReturn(41L);
+
+        // When
+        TripResponse partial = tripMapper.toResponse(trip);
+        when(ticketRepository.countSoldSeats(50L)).thenReturn(45L);
+        TripResponse oversold = tripMapper.toResponse(trip);
+
+        // Then
+        assertThat(partial.availableSeats()).isEqualTo(1);
+        assertThat(oversold.availableSeats()).isZero();
+        assertThat(oversold.occupancyPercentage()).isEqualTo(112.5);
     }
 
     @Test
@@ -831,9 +910,10 @@ class MapperTest {
         assertThat(response.assignment().driverName()).isEqualTo("Carlos Conductor");
         assertThat(response.assignment().tripId()).isEqualTo(50L);
         assertThat(response.status()).isEqualTo(Trip.TripStatus.BOARDING);
-        assertThat(response.soldSeats()).isNull();
-        assertThat(response.availableSeats()).isNull();
-        assertThat(response.occupancyPercentage()).isNull();
+        // Sin tickets vendidos: ocupación 0 y todas las sillas disponibles; los números de silla los añade el servicio
+        assertThat(response.soldSeats()).isZero();
+        assertThat(response.availableSeats()).isEqualTo(40);
+        assertThat(response.occupancyPercentage()).isEqualTo(0.0);
         assertThat(response.availableSeatNumbers()).isNull();
     }
 

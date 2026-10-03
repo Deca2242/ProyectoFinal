@@ -1,12 +1,16 @@
 package com.web.service.trip;
 
+import com.web.dto.trip.SeatAvailabilityResponse;
 import com.web.dto.trip.SeatStatusResponse;
+import com.web.dto.trip.SegmentOccupancyResponse;
 import com.web.dto.trip.TripCreateRequest;
 import com.web.dto.trip.TripDetailResponse;
 import com.web.dto.trip.TripResponse;
 import com.web.dto.trip.mapper.TripMapper;
 import com.web.entity.Bus;
 import com.web.entity.Route;
+import com.web.entity.Seat;
+import com.web.entity.SeatHold;
 import com.web.entity.Stop;
 import com.web.entity.Ticket;
 import com.web.entity.Trip;
@@ -16,9 +20,11 @@ import com.web.exception.ResourceNotFoundException;
 import com.web.repository.BusRepository;
 import com.web.repository.RouteRepository;
 import com.web.repository.SeatHoldRepository;
+import com.web.repository.SeatRepository;
 import com.web.repository.StopRepository;
 import com.web.repository.TicketRepository;
 import com.web.repository.TripRepository;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -30,6 +36,9 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.SecurityContextHolder;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -61,6 +70,8 @@ class TripServiceImplTest {
 
     @Mock
     private SeatHoldRepository seatHoldRepository;
+    @Mock
+    private SeatRepository seatRepository;
 
     @Mock
     private com.web.repository.ParcelRepository parcelRepository;
@@ -107,14 +118,19 @@ class TripServiceImplTest {
                 1L, 1L, "Bogotá - Medellín", "Bogotá", "Medellín",
                 1L, "ABC123", 40,
                 LocalDate.now().plusDays(1), LocalDateTime.now().plusDays(1).plusHours(8), null,
-                Trip.TripStatus.SCHEDULED, 0, 0.0
+                Trip.TripStatus.SCHEDULED, 0, 0.0, null, null, null, null
         );
 
         tripDetailResponse = new TripDetailResponse(
                 1L, null, null,
                 LocalDate.now().plusDays(1), LocalDateTime.now().plusDays(1).plusHours(8), null,
-                Trip.TripStatus.SCHEDULED, null, 0, 40, 0.0, List.of()
+                Trip.TripStatus.SCHEDULED, null, 0, 40, 0.0, List.of(), null, null, null
         );
+    }
+
+    @AfterEach
+    void clearSecurityContext() {
+        SecurityContextHolder.clearContext();
     }
 
     @Test
@@ -153,19 +169,18 @@ class TripServiceImplTest {
         List<Trip> trips = List.of(trip);
         List<TripResponse> responses = List.of(tripResponse);
 
-        when(tripRepository.findByRouteIdAndTripDate(1L, LocalDate.now().plusDays(1)))
+        when(tripRepository.searchTrips(eq(1L), eq(LocalDate.now().plusDays(1)), eq(false), any(LocalDateTime.class)))
                 .thenReturn(trips);
         when(tripMapper.toResponseList(trips)).thenReturn(responses);
 
         // When
-        List<TripResponse> result = tripService.searchTrips(1L, LocalDate.now().plusDays(1));
+        List<TripResponse> result = tripService.searchTrips(1L, LocalDate.now().plusDays(1), false);
 
         // Then
         assertThat(result).isNotNull();
         assertThat(result).hasSize(1);
-        verify(tripRepository).findByRouteIdAndTripDate(1L, LocalDate.now().plusDays(1));
+        verify(tripRepository).searchTrips(eq(1L), eq(LocalDate.now().plusDays(1)), eq(false), any(LocalDateTime.class));
     }
-
     @Test
     void shouldGetTripById_WithValidId_ReturnTripDetail() {
         // Given
@@ -199,18 +214,23 @@ class TripServiceImplTest {
         when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
         when(stopRepository.findById(1L)).thenReturn(Optional.of(fromStop));
         when(stopRepository.findById(2L)).thenReturn(Optional.of(toStop));
-        when(ticketRepository.isSeatAvailableForSegment(anyLong(), anyInt(), anyInt(), anyInt()))
-                .thenReturn(true);
+        when(ticketRepository.findTicketsBySegment(1L, 1, 2)).thenReturn(List.of());
 
         // When
-        List<SeatStatusResponse> result = tripService.getSeatAvailability(1L, 1L, 2L);
+        SeatAvailabilityResponse result = tripService.getSeatAvailability(1L, 1L, 2L);
 
         // Then
         assertThat(result).isNotNull();
-        assertThat(result).hasSize(40); // Bus capacity
-        verify(ticketRepository, times(40)).isSeatAvailableForSegment(anyLong(), anyInt(), anyInt(), anyInt());
+        assertThat(result.tripId()).isEqualTo(1L);
+        assertThat(result.fromStopId()).isEqualTo(1L);
+        assertThat(result.toStopId()).isEqualTo(2L);
+        assertThat(result.totalSeats()).isEqualTo(40); // Bus capacity
+        assertThat(result.availableSeats()).isEqualTo(40);
+        assertThat(result.seats()).hasSize(40);
+        // Sin N+1: una sola consulta de tickets para todo el mapa
+        verify(ticketRepository).findTicketsBySegment(1L, 1, 2);
+        verify(ticketRepository, never()).isSeatAvailableForSegment(anyLong(), anyInt(), anyInt(), anyInt());
     }
-
     @Test
     void shouldGetSeatAvailability_WithApprovedOverbooking_IncludeExtraSeats() {
         // Given: 2 sillas de overbooking aprobadas => se listan las sillas 1..42
@@ -220,34 +240,128 @@ class TripServiceImplTest {
         when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
         when(stopRepository.findById(1L)).thenReturn(Optional.of(fromStop));
         when(stopRepository.findById(2L)).thenReturn(Optional.of(toStop));
-        when(ticketRepository.isSeatAvailableForSegment(anyLong(), anyInt(), anyInt(), anyInt())).thenReturn(true);
+        when(ticketRepository.findTicketsBySegment(1L, 1, 2)).thenReturn(List.of());
 
         // When
-        List<SeatStatusResponse> result = tripService.getSeatAvailability(1L, 1L, 2L);
+        SeatAvailabilityResponse result = tripService.getSeatAvailability(1L, 1L, 2L);
 
         // Then
-        assertThat(result).hasSize(42);
-        assertThat(result.get(41).seatNumber()).isEqualTo(42);
+        assertThat(result.totalSeats()).isEqualTo(42);
+        assertThat(result.seats()).hasSize(42);
+        assertThat(result.seats().get(41).seatNumber()).isEqualTo(42);
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = Trip.TripStatus.class, names = {"CANCELLED", "ARRIVED"})
+    void shouldGetSeatAvailability_OnCancelledTrip_Throw422(Trip.TripStatus status) {
+        // Given
+        trip.setStatus(status);
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+
+        // When/Then
+        assertThatThrownBy(() -> tripService.getSeatAvailability(1L, 1L, 2L))
+                .isInstanceOf(InvalidStateTransitionException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getStatus())
+                        .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY));
+        verifyNoInteractions(stopRepository, ticketRepository, seatHoldRepository, seatRepository);
     }
 
     @Test
-    void shouldGetTripById_WithOverbookingSold_NeverReturnNegativeAvailableSeats() {
-        // Given: 42 sillas vendidas en un bus de 40 con solo 1 aprobada
+    void shouldGetSeatAvailability_ExposeSeatType() {
+        // Given: bus de 3 sillas con la 2 preferencial; la 3 no tiene fila en seats (STANDARD por defecto)
+        bus.setCapacity(3);
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+        when(stopRepository.findById(1L)).thenReturn(Optional.of(buildStop(1L, route, 1)));
+        when(stopRepository.findById(2L)).thenReturn(Optional.of(buildStop(2L, route, 2)));
+        when(ticketRepository.findTicketsBySegment(1L, 1, 2)).thenReturn(List.of());
+        when(seatRepository.findByBusIdOrderBySeatNumberAsc(1L)).thenReturn(List.of(
+                Seat.builder().bus(bus).seatNumber(1).seatType(Seat.SeatType.STANDARD).build(),
+                Seat.builder().bus(bus).seatNumber(2).seatType(Seat.SeatType.PREFERENTIAL).build()));
+
+        // When
+        SeatAvailabilityResponse result = tripService.getSeatAvailability(1L, 1L, 2L);
+
+        // Then
+        assertThat(result.seats()).extracting(SeatStatusResponse::seatType)
+                .containsExactly("STANDARD", "PREFERENTIAL", "STANDARD");
+    }
+
+    @Test
+    void shouldGetSeatAvailability_WithOverlappingHold_MarkSeatHeld() {
+        // Given: hold activo en la silla 1 para el tramo 1→3 (se solapa con 1→2)
+        bus.setCapacity(2);
+        SeatHold hold = SeatHold.builder()
+                .seatNumber(1)
+                .fromStop(buildStop(1L, route, 1))
+                .toStop(buildStop(3L, route, 3))
+                .build();
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+        when(stopRepository.findById(1L)).thenReturn(Optional.of(buildStop(1L, route, 1)));
+        when(stopRepository.findById(2L)).thenReturn(Optional.of(buildStop(2L, route, 2)));
+        when(ticketRepository.findTicketsBySegment(1L, 1, 2)).thenReturn(List.of());
+        when(seatHoldRepository.findActiveHoldsByTrip(eq(1L), any(LocalDateTime.class))).thenReturn(List.of(hold));
+
+        // When
+        SeatAvailabilityResponse result = tripService.getSeatAvailability(1L, 1L, 2L);
+
+        // Then
+        assertThat(result.availableSeats()).isEqualTo(1);
+        assertThat(result.seats()).containsExactly(
+                new SeatStatusResponse(1, false, "HELD", "STANDARD"),
+                new SeatStatusResponse(2, true, "AVAILABLE", "STANDARD"));
+    }
+
+    // ==================== getOccupancyBySegment ====================
+
+    @Test
+    void shouldGetOccupancyBySegment_CountEachConsecutiveSegment() {
+        // Given: ruta A(1) → B(2) → C(3) y bus de 40 sillas
+        Stop a = Stop.builder().id(10L).route(route).name("A").order(1).build();
+        Stop b = Stop.builder().id(11L).route(route).name("B").order(2).build();
+        Stop c = Stop.builder().id(12L).route(route).name("C").order(3).build();
+        when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
+        when(stopRepository.findByRouteIdOrderByOrderAsc(1L)).thenReturn(List.of(a, b, c));
+        when(ticketRepository.countSoldSeatsForSegment(1L, 1, 2)).thenReturn(2L);
+        when(ticketRepository.countSoldSeatsForSegment(1L, 2, 3)).thenReturn(10L);
+
+        // When
+        List<SegmentOccupancyResponse> result = tripService.getOccupancyBySegment(1L);
+
+        // Then
+        assertThat(result).containsExactly(
+                new SegmentOccupancyResponse(10L, "A", 11L, "B", 2, 40, 5.0),
+                new SegmentOccupancyResponse(11L, "B", 12L, "C", 10, 40, 25.0));
+    }
+
+    @Test
+    void shouldGetOccupancyBySegment_WithNonExistentTrip_ThrowResourceNotFound() {
+        // Given
+        when(tripRepository.findById(99L)).thenReturn(Optional.empty());
+
+        // When/Then
+        assertThatThrownBy(() -> tripService.getOccupancyBySegment(99L))
+                .isInstanceOf(ResourceNotFoundException.class);
+        verifyNoInteractions(stopRepository, ticketRepository);
+    }
+    @Test
+    void shouldGetTripById_WithOverbookingSold_ListNoAvailableSeatNumbers() {
+        // Given: las 41 sillas vendibles (40 + 1 aprobada) están vendidas
         trip.setOverbookingApprovedSeats(1);
         when(tripRepository.findByIdWithDetails(1L)).thenReturn(Optional.of(trip));
         when(tripMapper.toDetailResponse(trip)).thenReturn(tripDetailResponse);
-        when(ticketRepository.countSoldSeats(1L)).thenReturn(42L);
-        when(ticketRepository.existsByTripIdAndSeatNumberAndStatus(anyLong(), anyInt(), any())).thenReturn(true);
+        when(ticketRepository.findByTripIdAndStatus(1L, Ticket.TicketStatus.SOLD))
+                .thenReturn(java.util.stream.IntStream.rangeClosed(1, 41)
+                        .mapToObj(n -> Ticket.builder().seatNumber(n).build())
+                        .toList());
 
         // When
         TripDetailResponse result = tripService.getTripById(1L);
 
         // Then
-        assertThat(result.availableSeats()).isZero();
         assertThat(result.availableSeatNumbers()).isEmpty();
-        verify(ticketRepository, times(41)).existsByTripIdAndSeatNumberAndStatus(anyLong(), anyInt(), any());
+        // Sin N+1: una sola consulta de tickets vendidos
+        verify(ticketRepository, never()).existsByTripIdAndSeatNumberAndStatus(anyLong(), anyInt(), any());
     }
-
     // ==================== createTrip ====================
 
     @Test
@@ -325,60 +439,54 @@ class TripServiceImplTest {
     // ==================== searchTrips ====================
 
     @Test
-    void shouldSearchTrips_WithOnlyRouteId_FilterByRoute() {
-        // Given
-        Trip otherRouteTrip = Trip.builder()
-                .id(2L)
-                .route(Route.builder().id(2L).build())
-                .tripDate(LocalDate.now().plusDays(1))
-                .build();
-        when(tripRepository.findAll()).thenReturn(List.of(trip, otherRouteTrip));
+    void shouldSearchTrips_ExcludeCancelledArrivedAndPastDepartures() {
+        // Given: el filtro de salidas reservables lo aplica la consulta (includeAll = false)
+        when(tripRepository.searchTrips(eq(1L), isNull(), eq(false), any(LocalDateTime.class))).thenReturn(List.of(trip));
         when(tripMapper.toResponseList(List.of(trip))).thenReturn(List.of(tripResponse));
+        LocalDateTime before = LocalDateTime.now();
 
         // When
-        List<TripResponse> result = tripService.searchTrips(1L, null);
+        List<TripResponse> result = tripService.searchTrips(1L, null, false);
 
-        // Then
+        // Then: se compara contra la hora actual para excluir las salidas pasadas
         assertThat(result).containsExactly(tripResponse);
-        verify(tripRepository, never()).findByRouteIdAndTripDate(any(), any());
+        ArgumentCaptor<LocalDateTime> nowCaptor = ArgumentCaptor.forClass(LocalDateTime.class);
+        verify(tripRepository).searchTrips(eq(1L), isNull(), eq(false), nowCaptor.capture());
+        assertThat(nowCaptor.getValue()).isAfterOrEqualTo(before).isBeforeOrEqualTo(LocalDateTime.now());
     }
 
-    @Test
-    void shouldSearchTrips_WithOnlyDate_FilterByDate() {
+    @ParameterizedTest
+    @CsvSource({"PASSENGER", "CLERK", "DRIVER"})
+    void shouldSearchTrips_WithIncludeAllFromNonStaffRole_IgnoreIt(String role) {
         // Given
+        authenticateAs(role);
         LocalDate date = LocalDate.now().plusDays(1);
-        Trip otherDateTrip = Trip.builder()
-                .id(2L)
-                .route(route)
-                .tripDate(date.plusDays(3))
-                .build();
-        when(tripRepository.findAll()).thenReturn(List.of(otherDateTrip, trip));
-        when(tripMapper.toResponseList(List.of(trip))).thenReturn(List.of(tripResponse));
+        when(tripRepository.searchTrips(isNull(), eq(date), eq(false), any(LocalDateTime.class))).thenReturn(List.of());
+        when(tripMapper.toResponseList(List.of())).thenReturn(List.of());
 
         // When
-        List<TripResponse> result = tripService.searchTrips(null, date);
+        tripService.searchTrips(null, date, true);
 
         // Then
-        assertThat(result).containsExactly(tripResponse);
-        verify(tripRepository, never()).findByRouteIdAndTripDate(any(), any());
+        verify(tripRepository).searchTrips(isNull(), eq(date), eq(false), any(LocalDateTime.class));
     }
 
-    @Test
-    void shouldSearchTrips_WithoutFilters_ReturnAllTrips() {
+    @ParameterizedTest
+    @CsvSource({"ADMIN", "DISPATCHER"})
+    void shouldSearchTrips_WithIncludeAllFromStaff_ReturnAllTrips(String role) {
         // Given
+        authenticateAs(role);
         List<Trip> trips = List.of(trip);
-        when(tripRepository.findAll()).thenReturn(trips);
+        when(tripRepository.searchTrips(eq(1L), isNull(), eq(true), any(LocalDateTime.class))).thenReturn(trips);
         when(tripMapper.toResponseList(trips)).thenReturn(List.of(tripResponse));
 
         // When
-        List<TripResponse> result = tripService.searchTrips(null, null);
+        List<TripResponse> result = tripService.searchTrips(1L, null, true);
 
         // Then
         assertThat(result).hasSize(1);
-        verify(tripRepository).findAll();
-        verify(tripRepository, never()).findByRouteIdAndTripDate(any(), any());
+        verify(tripRepository).searchTrips(eq(1L), isNull(), eq(true), any(LocalDateTime.class));
     }
-
     // ==================== getTripById ====================
 
     @Test
@@ -395,13 +503,17 @@ class TripServiceImplTest {
 
     @Test
     void shouldGetTripById_WithSoldSeats_CalculateOccupancyAndAvailableSeatNumbers() {
-        // Given: bus de 4 asientos con los asientos 1 y 3 vendidos
+        // Given: bus de 4 asientos con los asientos 1 y 3 vendidos (la ocupación la calcula el mapper)
         bus.setCapacity(4);
+        TripDetailResponse mapped = new TripDetailResponse(
+                1L, null, null,
+                LocalDate.now().plusDays(1), LocalDateTime.now().plusDays(1).plusHours(8), null,
+                Trip.TripStatus.SCHEDULED, null, 2, 2, 50.0, null, "A3", null, null);
         when(tripRepository.findByIdWithDetails(1L)).thenReturn(Optional.of(trip));
-        when(tripMapper.toDetailResponse(trip)).thenReturn(tripDetailResponse);
-        when(ticketRepository.countSoldSeats(1L)).thenReturn(2L);
-        when(ticketRepository.existsByTripIdAndSeatNumberAndStatus(eq(1L), anyInt(), eq(Ticket.TicketStatus.SOLD)))
-                .thenAnswer(inv -> Set.of(1, 3).contains(inv.<Integer>getArgument(1)));
+        when(tripMapper.toDetailResponse(trip)).thenReturn(mapped);
+        when(ticketRepository.findByTripIdAndStatus(1L, Ticket.TicketStatus.SOLD)).thenReturn(List.of(
+                Ticket.builder().seatNumber(1).build(),
+                Ticket.builder().seatNumber(3).build()));
 
         // When
         TripDetailResponse result = tripService.getTripById(1L);
@@ -412,29 +524,23 @@ class TripServiceImplTest {
         assertThat(result.soldSeats()).isEqualTo(2);
         assertThat(result.availableSeats()).isEqualTo(2);
         assertThat(result.occupancyPercentage()).isEqualTo(50.0);
+        assertThat(result.platform()).isEqualTo("A3");
+        // Disponibles para el viaje completo
         assertThat(result.availableSeatNumbers()).containsExactly(2, 4);
-        verify(ticketRepository, times(4))
-                .existsByTripIdAndSeatNumberAndStatus(eq(1L), anyInt(), eq(Ticket.TicketStatus.SOLD));
     }
-
     @Test
-    void shouldGetTripById_WithZeroCapacityBus_ReturnZeroOccupancyWithoutDivision() {
+    void shouldGetTripById_WithZeroCapacityBus_ReturnNoAvailableSeatNumbers() {
         // Given
         bus.setCapacity(0);
         when(tripRepository.findByIdWithDetails(1L)).thenReturn(Optional.of(trip));
         when(tripMapper.toDetailResponse(trip)).thenReturn(tripDetailResponse);
-        when(ticketRepository.countSoldSeats(1L)).thenReturn(0L);
 
         // When
         TripDetailResponse result = tripService.getTripById(1L);
 
         // Then
-        assertThat(result.occupancyPercentage()).isEqualTo(0.0);
-        assertThat(result.availableSeats()).isZero();
         assertThat(result.availableSeatNumbers()).isEmpty();
-        verify(ticketRepository, never()).existsByTripIdAndSeatNumberAndStatus(anyLong(), anyInt(), any());
     }
-
     // ==================== getSeatAvailability ====================
 
     @Test
@@ -519,20 +625,20 @@ class TripServiceImplTest {
         when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
         when(stopRepository.findById(5L)).thenReturn(Optional.of(buildStop(5L, route, 2)));
         when(stopRepository.findById(8L)).thenReturn(Optional.of(buildStop(8L, route, 3)));
-        when(ticketRepository.isSeatAvailableForSegment(eq(1L), anyInt(), eq(2), eq(3)))
-                .thenAnswer(inv -> inv.<Integer>getArgument(1) != 2);
+        when(ticketRepository.findTicketsBySegment(1L, 2, 3))
+                .thenReturn(List.of(Ticket.builder().seatNumber(2).build()));
 
         // When
-        List<SeatStatusResponse> result = tripService.getSeatAvailability(1L, 5L, 8L);
+        SeatAvailabilityResponse result = tripService.getSeatAvailability(1L, 5L, 8L);
 
         // Then
-        assertThat(result).containsExactly(
-                new SeatStatusResponse(1, true, "AVAILABLE"),
-                new SeatStatusResponse(2, false, "OCCUPIED"),
-                new SeatStatusResponse(3, true, "AVAILABLE"));
-        verify(ticketRepository, never()).isSeatAvailableForSegment(anyLong(), anyInt(), eq(5), eq(8));
+        assertThat(result.availableSeats()).isEqualTo(2);
+        assertThat(result.seats()).containsExactly(
+                new SeatStatusResponse(1, true, "AVAILABLE", "STANDARD"),
+                new SeatStatusResponse(2, false, "OCCUPIED", "STANDARD"),
+                new SeatStatusResponse(3, true, "AVAILABLE", "STANDARD"));
+        verify(ticketRepository, never()).findTicketsBySegment(anyLong(), eq(5), eq(8));
     }
-
     // ==================== updateTripStatus ====================
 
     @Test
@@ -612,6 +718,11 @@ class TripServiceImplTest {
                 LocalDate.now().plusDays(1).atTime(8, 0),
                 LocalDate.now().plusDays(1).atTime(12, 0)
         );
+    }
+
+    private void authenticateAs(String role) {
+        SecurityContextHolder.getContext().setAuthentication(new UsernamePasswordAuthenticationToken(
+                "user@test.com", null, List.of(new SimpleGrantedAuthority("ROLE_" + role))));
     }
 
     private Stop buildStop(Long id, Route stopRoute, int order) {

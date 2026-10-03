@@ -1,7 +1,9 @@
 package com.web.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.web.dto.trip.SeatAvailabilityResponse;
 import com.web.dto.trip.SeatStatusResponse;
+import com.web.dto.trip.SegmentOccupancyResponse;
 import com.web.dto.trip.TripCreateRequest;
 import com.web.dto.trip.TripDetailResponse;
 import com.web.dto.trip.TripResponse;
@@ -28,6 +30,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -62,10 +65,10 @@ class TripControllerTest {
                 1L, 1L, "Route Name", "Origin", "Destination",
                 1L, "ABC123", 40,
                 LocalDate.now(), LocalDateTime.now(), null,
-                Trip.TripStatus.SCHEDULED, 0, 0.0
+                Trip.TripStatus.SCHEDULED, 0, 0.0, null, null, null, null
         ));
 
-        when(tripService.searchTrips(1L, LocalDate.now())).thenReturn(resp);
+        when(tripService.searchTrips(1L, LocalDate.now(), false)).thenReturn(resp);
 
         mvc.perform(get("/api/v1/trips")
                         .with(anonymous())
@@ -89,7 +92,7 @@ class TripControllerTest {
         var resp = new TripDetailResponse(
                 1L, null, null,
                 LocalDate.now(), LocalDateTime.now(), null,
-                Trip.TripStatus.SCHEDULED, null, 0, 40, 0.0, List.of()
+                Trip.TripStatus.SCHEDULED, null, 0, 40, 0.0, List.of(), null, null, null
         );
 
         when(tripService.getTripById(1L)).thenReturn(resp);
@@ -113,7 +116,8 @@ class TripControllerTest {
     // Verifica que cualquier usuario pueda consultar disponibilidad de asientos (público)
     @Test
     void getSeatAvailability_shouldReturn200() throws Exception {
-        var resp = List.of(new SeatStatusResponse(1, true, "AVAILABLE"));
+        var resp = new SeatAvailabilityResponse(1L, 1L, 2L, 1, 1,
+                List.of(new SeatStatusResponse(1, true, "AVAILABLE", "PREFERENTIAL")));
 
         when(tripService.getSeatAvailability(1L, 1L, 2L)).thenReturn(resp);
 
@@ -122,7 +126,11 @@ class TripControllerTest {
                         .param("fromStopId", "1")
                         .param("toStopId", "2"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$[0].seatNumber").value(1));
+                .andExpect(jsonPath("$.tripId").value(1))
+                .andExpect(jsonPath("$.totalSeats").value(1))
+                .andExpect(jsonPath("$.availableSeats").value(1))
+                .andExpect(jsonPath("$.seats[0].seatNumber").value(1))
+                .andExpect(jsonPath("$.seats[0].seatType").value("PREFERENTIAL"));
     }
 
     // Verifica que un ADMIN pueda crear un nuevo viaje
@@ -138,7 +146,7 @@ class TripControllerTest {
                 1L, 1L, "Route Name", "Origin", "Destination",
                 1L, "ABC123", 40,
                 LocalDate.now().plusDays(1), LocalDateTime.now().plusDays(1).plusHours(8), null,
-                Trip.TripStatus.SCHEDULED, 0, 0.0
+                Trip.TripStatus.SCHEDULED, 0, 0.0, null, null, null, null
         );
 
         when(tripService.createTrip(any())).thenReturn(resp);
@@ -159,7 +167,7 @@ class TripControllerTest {
                 1L, 1L, "Route Name", "Origin", "Destination",
                 1L, "ABC123", 40,
                 LocalDate.now(), LocalDateTime.now(), null,
-                Trip.TripStatus.BOARDING, 0, 0.0
+                Trip.TripStatus.BOARDING, 0, 0.0, null, null, null, null
         );
 
         when(tripService.updateTripStatus(1L, Trip.TripStatus.BOARDING)).thenReturn(resp);
@@ -185,7 +193,7 @@ class TripControllerTest {
                 1L, 1L, "Route Name", "Origin", "Destination",
                 1L, "ABC123", 40,
                 LocalDate.now(), LocalDateTime.now(), null,
-                status, 0, 0.0
+                status, 0, 0.0, null, null, null, null
         );
     }
 
@@ -203,7 +211,7 @@ class TripControllerTest {
     @Test
     void searchTrips_shouldReturn200WithOnlyDate() throws Exception {
         LocalDate date = LocalDate.of(2026, 10, 1);
-        when(tripService.searchTrips(null, date)).thenReturn(List.of(trip(Trip.TripStatus.SCHEDULED)));
+        when(tripService.searchTrips(null, date, false)).thenReturn(List.of(trip(Trip.TripStatus.SCHEDULED)));
 
         mvc.perform(get("/api/v1/trips")
                         .with(anonymous())
@@ -215,13 +223,28 @@ class TripControllerTest {
     // Verifica que se pueda buscar solo por ruta
     @Test
     void searchTrips_shouldReturn200WithOnlyRouteId() throws Exception {
-        when(tripService.searchTrips(1L, null)).thenReturn(List.of());
+        when(tripService.searchTrips(1L, null, false)).thenReturn(List.of());
 
         mvc.perform(get("/api/v1/trips")
                         .with(anonymous())
                         .param("routeId", "1"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$").isEmpty());
+    }
+
+    // Verifica que el parámetro includeAll llegue al servicio (el servicio decide si el rol puede usarlo)
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void searchTrips_shouldPassIncludeAllToService() throws Exception {
+        when(tripService.searchTrips(1L, null, true)).thenReturn(List.of(trip(Trip.TripStatus.CANCELLED)));
+
+        mvc.perform(get("/api/v1/trips")
+                        .param("routeId", "1")
+                        .param("includeAll", "true"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].status").value("CANCELLED"));
+
+        verify(tripService).searchTrips(1L, null, true);
     }
 
     // Verifica que una fecha con formato inválido devuelva 400
@@ -297,7 +320,80 @@ class TripControllerTest {
                 .andExpect(status().isNotFound());
     }
 
+    // Verifica que el mapa de sillas de un viaje cancelado devuelva 422
+    @Test
+    void getSeatAvailability_shouldReturn422WhenTripCancelled() throws Exception {
+        when(tripService.getSeatAvailability(1L, 1L, 2L))
+                .thenThrow(new InvalidStateTransitionException("No hay mapa de sillas para un viaje en estado CANCELLED"));
+
+        mvc.perform(get("/api/v1/trips/1/seats")
+                        .with(anonymous())
+                        .param("fromStopId", "1")
+                        .param("toStopId", "2"))
+                .andExpect(status().isUnprocessableEntity());
+    }
+
+    // GET /trips/{id}/occupancy
+
+    // Verifica que un DISPATCHER vea la ocupación por tramos
+    @Test
+    @WithMockUser(roles = "DISPATCHER")
+    void getOccupancy_shouldReturn200ForDispatcher() throws Exception {
+        when(tripService.getOccupancyBySegment(1L)).thenReturn(List.of(
+                new SegmentOccupancyResponse(10L, "A", 11L, "B", 1, 40, 2.5),
+                new SegmentOccupancyResponse(11L, "B", 12L, "C", 0, 40, 0.0)));
+
+        mvc.perform(get("/api/v1/trips/1/occupancy"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[0].fromStopName").value("A"))
+                .andExpect(jsonPath("$[0].soldSeats").value(1))
+                .andExpect(jsonPath("$[1].occupancyPercentage").value(0.0));
+    }
+
+    // Verifica que un ADMIN también pueda consultar la ocupación por tramos
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void getOccupancy_shouldReturn200ForAdmin() throws Exception {
+        when(tripService.getOccupancyBySegment(1L)).thenReturn(List.of());
+
+        mvc.perform(get("/api/v1/trips/1/occupancy"))
+                .andExpect(status().isOk());
+    }
+
+    // Verifica que un PASSENGER no pueda consultar la ocupación por tramos
+    @Test
+    @WithMockUser(roles = "PASSENGER")
+    void getOccupancy_shouldReturn403ForPassenger() throws Exception {
+        mvc.perform(get("/api/v1/trips/1/occupancy"))
+                .andExpect(status().isForbidden());
+
+        verifyNoInteractions(tripService);
+    }
+
+    // Verifica que la ocupación por tramos no sea pública
+    @Test
+    void getOccupancy_shouldReturn401WhenAnonymous() throws Exception {
+        mvc.perform(get("/api/v1/trips/1/occupancy"))
+                .andExpect(status().isUnauthorized());
+
+        verifyNoInteractions(tripService);
+    }
+
     // POST /trips
+
+    // Verifica que arrivalEta sea opcional (se calcula con la duración de la ruta)
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void createTrip_shouldReturn201WithoutArrivalEta() throws Exception {
+        when(tripService.createTrip(any())).thenReturn(trip(Trip.TripStatus.SCHEDULED));
+
+        mvc.perform(post("/api/v1/trips")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"routeId\":1,\"busId\":1,\"tripDate\":\"2030-10-01\",\"departureTime\":\"2030-10-01T08:00:00\"}"))
+                .andExpect(status().isCreated());
+    }
 
     // Verifica que se rechace un viaje sin ruta ni bus
     @Test
@@ -424,6 +520,18 @@ class TripControllerTest {
                 .andExpect(status().isForbidden());
 
         verifyNoInteractions(tripService);
+    }
+
+    // Verifica que cancelar un viaje que ya partió devuelva 422
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void cancelTrip_shouldReturn422WhenDeparted() throws Exception {
+        doThrow(new InvalidStateTransitionException("DEPARTED", "CANCELLED"))
+                .when(tripService).cancelTrip(1L);
+
+        mvc.perform(delete("/api/v1/trips/1")
+                        .with(csrf()))
+                .andExpect(status().isUnprocessableEntity());
     }
 
     // Verifica que sin autenticación no se puedan cancelar viajes

@@ -23,5 +23,8 @@ public record TripDetailResponse(
         Integer soldSeats,
         Integer availableSeats,
         Double occupancyPercentage,
-        List<Integer> availableSeatNumbers) implements Serializable {
+        List<Integer> availableSeatNumbers, // Sillas libres para el viaje completo (sin venta en ningún tramo)
+        String platform,
+        LocalDateTime departedAt,
+        LocalDateTime arrivedAt) implements Serializable {
 }

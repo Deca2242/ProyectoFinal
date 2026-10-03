@@ -312,12 +312,13 @@ class AdminFeaturesIntegrationTest extends BaseIntegrationTest {
         String adminToken = staff("admin@admintest.com", User.Role.ADMIN);
         String paxToken = registerAndLogin("pax@admintest.com");
         Bus busyBus = newBus(40);
-        newTrip(busyBus, date.atTime(6, 0));
+        // Su viaje 11:00-13:00 se solapa con el de las 12:00
+        newTrip(busyBus, date.atTime(11, 0));
         Bus smallBus = newBus(10);
         Bus freeBus = newBus(40);
         flushAndClear();
 
-        // Bus con otro viaje ese día → 409
+        // Bus con otro viaje que se solapa en horario → 409
         reschedule(adminToken, new TripUpdateRequest(null, null, busyBus.getId()))
                 .andExpect(status().isConflict());
 

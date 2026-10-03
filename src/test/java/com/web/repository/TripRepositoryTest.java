@@ -173,24 +173,28 @@ class TripRepositoryTest extends BaseRepositoryTest {
     }
 
     @Test
-    @DisplayName("Debe encontrar viajes por ruta, fecha y estado")
-    void shouldFindTripsByRouteAndDateAndStatus() {
+    @DisplayName("searchTrips: sin includeAll solo devuelve salidas SCHEDULED/BOARDING futuras, ordenadas por salida")
+    void shouldSearchTrips_OnlyBookableTrips() {
         // When
-        List<Trip> scheduledTrips = tripRepository.findByRouteIdAndTripDateAndStatus(
-                route.getId(),
-                LocalDate.now(),
-                Trip.TripStatus.SCHEDULED
-        );
-
-        List<Trip> cancelledTrips = tripRepository.findByRouteIdAndTripDateAndStatus(
-                route.getId(),
-                LocalDate.now().plusDays(1),
-                Trip.TripStatus.CANCELLED
-        );
+        List<Trip> byRouteAndDate = tripRepository.searchTrips(route.getId(), LocalDate.now(), false, LocalDateTime.now());
+        // Ruta sin fecha (parámetro nulo): el viaje cancelado de mañana no aparece
+        List<Trip> byRouteOnly = tripRepository.searchTrips(route.getId(), null, false, LocalDateTime.now());
 
         // Then
-        assertThat(scheduledTrips).hasSize(2);
-        assertThat(cancelledTrips).hasSize(1);
+        assertThat(byRouteAndDate).extracting(Trip::getId).containsExactly(trip1.getId(), trip2.getId());
+        assertThat(byRouteOnly).extracting(Trip::getId).containsExactly(trip1.getId(), trip2.getId());
+    }
+
+    @Test
+    @DisplayName("searchTrips: excluye las salidas que ya pasaron y con includeAll devuelve también las canceladas")
+    void shouldSearchTrips_ExcludePastDepartures_AndIncludeAllWhenRequested() {
+        // When: a las 3 horas trip1 ya salió
+        List<Trip> later = tripRepository.searchTrips(null, null, false, LocalDateTime.now().plusHours(3));
+        List<Trip> allTomorrow = tripRepository.searchTrips(null, LocalDate.now().plusDays(1), true, LocalDateTime.now());
+
+        // Then
+        assertThat(later).extracting(Trip::getId).containsExactly(trip2.getId());
+        assertThat(allTomorrow).extracting(Trip::getId).containsExactly(trip3.getId());
     }
 
     @Test
@@ -282,9 +286,30 @@ class TripRepositoryTest extends BaseRepositoryTest {
     }
 
     @Test
-    @DisplayName("Debe obtener cantidad de asientos disponibles para un tramo")
-    void shouldGetAvailableSeatsForSegment() {
-        // Given - crear tickets para tramo Bogotá -> Tunja (5 asientos)
+    @DisplayName("existsOverlappingTripForBus: detecta solapamiento horario e ignora el propio viaje y los cancelados")
+    void shouldDetectOverlappingTripsForBus() {
+        LocalDateTime trip1Departure = trip1.getDepartureTime();
+        LocalDateTime trip1Arrival = trip1.getArrivalEta();
+
+        // Then: la franja de trip1 choca con trip1 salvo que se excluya
+        assertThat(tripRepository.existsOverlappingTripForBus(bus1.getId(),
+                trip1Departure.plusHours(1), trip1Arrival.plusHours(1), null)).isTrue();
+        assertThat(tripRepository.existsOverlappingTripForBus(bus1.getId(),
+                trip1Departure.plusHours(1), trip1Arrival.plusHours(1), trip1.getId())).isFalse();
+        // Un viaje que empieza justo cuando llega trip1 no se solapa
+        assertThat(tripRepository.existsOverlappingTripForBus(bus1.getId(),
+                trip1Arrival, trip1Arrival.plusHours(3), null)).isFalse();
+        // trip3 (mañana) está cancelado: no ocupa el bus
+        assertThat(tripRepository.existsOverlappingTripForBus(bus1.getId(),
+                trip3.getDepartureTime(), trip3.getArrivalEta(), null)).isFalse();
+        assertThat(tripRepository.findBusIdsWithOverlappingTrips(trip1Departure, trip1Arrival))
+                .containsExactlyInAnyOrder(bus1.getId(), bus2.getId());
+    }
+
+    @Test
+    @DisplayName("Viajes pendientes y silla vendida más alta de un bus en viajes futuros")
+    void shouldFindPendingTripsAndMaxSoldSeatForBus() {
+        // Given: un ticket vendido en la silla 7 de trip1
         User passenger = User.builder()
                 .name("Jorge Pasajero")
                 .email("jorge@example.com")
@@ -294,46 +319,28 @@ class TripRepositoryTest extends BaseRepositoryTest {
                 .passwordHash("$2a$10$hashedpassword")
                 .build();
         entityManager.persist(passenger);
-
-        for (int i = 1; i <= 5; i++) {
-            Ticket ticket = Ticket.builder()
-                    .trip(trip1)
-                    .passenger(passenger)
-                    .seatNumber(i)
-                    .fromStop(stopBogota)
-                    .toStop(stopTunja)
-                    .price(new BigDecimal("25000.00"))
-                    .paymentMethod(Ticket.PaymentMethod.CASH)
-                    .status(Ticket.TicketStatus.SOLD)
-                    .qrCode("QR-TRAMO-" + i)
-                    .build();
-            entityManager.persist(ticket);
-        }
+        entityManager.persist(Ticket.builder()
+                .trip(trip1)
+                .passenger(passenger)
+                .seatNumber(7)
+                .fromStop(stopBogota)
+                .toStop(stopTunja)
+                .price(new BigDecimal("25000.00"))
+                .paymentMethod(Ticket.PaymentMethod.CASH)
+                .status(Ticket.TicketStatus.SOLD)
+                .qrCode("QR-MAX-7")
+                .build());
         entityManager.flush();
 
-        // When - buscar disponibilidad para tramo Bogotá -> Tunja
-        Long available = tripRepository.getAvailableSeatsForSegment(
-                trip1.getId(),
-                stopBogota.getOrder(),
-                stopTunja.getOrder()
-        );
-
-        // Then - 40 - 5 = 35 disponibles
-        assertThat(available).isEqualTo(35);
-    }
-
-    @Test
-    @DisplayName("Debe retornar capacidad completa cuando no hay tickets vendidos")
-    void shouldReturnFullCapacityWhenNoTicketsSold() {
-        // When
-        Long available = tripRepository.getAvailableSeatsForSegment(
-                trip2.getId(),
-                stopBogota.getOrder(),
-                stopBucaramanga.getOrder()
-        );
-
         // Then
-        assertThat(available).isEqualTo(30); // Capacidad completa del bus2
+        assertThat(tripRepository.findMaxSoldSeatNumberInFutureTrips(bus1.getId(), LocalDateTime.now())).isEqualTo(7);
+        assertThat(tripRepository.findMaxSoldSeatNumberInFutureTrips(bus2.getId(), LocalDateTime.now())).isNull();
+        // Cuando trip1 ya salió, la silla vendida deja de limitar la capacidad
+        assertThat(tripRepository.findMaxSoldSeatNumberInFutureTrips(bus1.getId(), LocalDateTime.now().plusHours(3))).isNull();
+
+        assertThat(tripRepository.existsPendingTripsByBus(bus1.getId(), LocalDateTime.now())).isTrue();
+        assertThat(tripRepository.existsPendingTripsByBus(bus1.getId(), LocalDateTime.now().plusHours(3))).isFalse();
+        assertThat(tripRepository.countPendingTripsByRoute(route.getId(), LocalDateTime.now())).isEqualTo(2L);
     }
 
     @Test

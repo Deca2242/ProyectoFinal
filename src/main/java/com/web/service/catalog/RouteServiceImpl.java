@@ -6,6 +6,8 @@ import com.web.dto.catalog.Route.RouteResponse;
 import com.web.dto.catalog.Route.RouteUpdateRequest;
 import com.web.dto.catalog.Route.mapper.RouteMapper;
 import com.web.dto.catalog.Stop.StopCreateRequest;
+import com.web.dto.catalog.Stop.StopResponse;
+import com.web.dto.catalog.Stop.StopUpdateRequest;
 import com.web.dto.catalog.Stop.mapper.StopMapper;
 import com.web.entity.Route;
 import com.web.entity.Stop;
@@ -14,13 +16,14 @@ import com.web.exception.ResourceNotFoundException;
 import com.web.repository.RouteRepository;
 import com.web.repository.StopRepository;
 import com.web.repository.TripRepository;
+import com.web.util.SecurityUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -53,20 +56,25 @@ public class RouteServiceImpl implements RouteService {
         return routeMapper.toResponse(savedRoute);
     }
 
-    //Obtener todas las rutas
+    //Obtener todas las rutas: el público solo ve las activas; un ADMIN puede pedir también las inactivas
     @Override
     @Transactional(readOnly = true)
-    public List<RouteResponse> getAllRoutes() {
-        List<Route> routes = routeRepository.findAll();
+    public List<RouteResponse> getAllRoutes(boolean includeInactive) {
+        List<Route> routes = canSeeInactive(includeInactive)
+                ? routeRepository.findAll()
+                : routeRepository.findByIsActiveTrue();
         return routeMapper.toResponseList(routes);
     }
 
-    //Obtener ruta por ID
+    //Obtener ruta por ID (con paradas). Una ruta inactiva es 404 salvo para un ADMIN con includeInactive
     @Override
     @Transactional(readOnly = true)
-    public RouteDetailResponse getRouteById(Long id) {
+    public RouteDetailResponse getRouteById(Long id, boolean includeInactive) {
         Route route = routeRepository.findByIdWithStops(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Ruta", id));
+        if (Boolean.FALSE.equals(route.getIsActive()) && !canSeeInactive(includeInactive)) {
+            throw new ResourceNotFoundException("Ruta", id);
+        }
         return routeMapper.toDetailResponse(route);
     }
 
@@ -93,9 +101,9 @@ public class RouteServiceImpl implements RouteService {
         Route route = routeRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Ruta", id));
 
-        // Se incluyen los viajes de hoy (antes solo se contaban los posteriores a hoy)
-        if (tripRepository.countByRouteIdAndTripDateGreaterThanEqual(id, LocalDate.now()) > 0) {
-            throw new BusinessException("No se puede eliminar la ruta porque tiene viajes programados", HttpStatus.BAD_REQUEST, "ROUTE_HAS_TRIPS");
+        // Solo bloquean los viajes pendientes (SCHEDULED/BOARDING con salida futura); los históricos no
+        if (tripRepository.countPendingTripsByRoute(id, LocalDateTime.now()) > 0) {
+            throw new BusinessException("No se puede eliminar la ruta porque tiene viajes programados", HttpStatus.CONFLICT, "ROUTE_HAS_TRIPS");
         }
 
         // Borrado lógico: los viajes y tickets históricos siguen referenciando la ruta,
@@ -111,8 +119,20 @@ public class RouteServiceImpl implements RouteService {
         Route route = routeRepository.findByIdWithStops(routeId)
                 .orElseThrow(() -> new ResourceNotFoundException("Ruta", routeId));
 
+        // La ruta es la del path: si el body trae otra, la petición es inconsistente
+        if (request.routeId() != null && !request.routeId().equals(routeId)) {
+            throw new BusinessException("El routeId del cuerpo no coincide con la ruta de la URL", HttpStatus.BAD_REQUEST, "STOP_ROUTE_MISMATCH");
+        }
+
         if (stopRepository.existsByRouteIdAndOrder(routeId, request.order())) {
             throw new BusinessException("Ya existe una parada con el orden " + request.order() + " en esta ruta", HttpStatus.CONFLICT, "STOP_ORDER_EXISTS");
+        }
+
+        // Orden contiguo: la parada nueva va a continuación de la última (los tramos se calculan por orden)
+        int currentStops = route.getStops() == null ? 0 : route.getStops().size();
+        if (request.order() != currentStops + 1) {
+            throw new BusinessException("El orden de la nueva parada debe ser " + (currentStops + 1),
+                    HttpStatus.BAD_REQUEST, "STOP_ORDER_NOT_CONTIGUOUS");
         }
 
         Stop stop = stopMapper.toEntity(request);
@@ -151,8 +171,37 @@ public class RouteServiceImpl implements RouteService {
                     HttpStatus.CONFLICT, "STOP_IN_USE");
         }
 
+        // También se quita de la colección de la ruta (cascade): si no, al hacer flush se volvería a persistir
+        if (route.getStops() != null) {
+            route.getStops().remove(stop);
+        }
         stopRepository.delete(stop);
+        // Las paradas siguientes se corren una posición para mantener el orden contiguo
+        stopRepository.shiftOrdersAfter(routeId, stop.getOrder());
+    }
 
+    //Actualizar nombre y coordenadas de una parada
+    @Override
+    @Transactional
+    public StopResponse updateStop(Long routeId, Long stopId, StopUpdateRequest request) {
+        if (!routeRepository.existsById(routeId)) {
+            throw new ResourceNotFoundException("Ruta", routeId);
+        }
+
+        Stop stop = stopRepository.findById(stopId)
+                .orElseThrow(() -> new ResourceNotFoundException("Parada", stopId));
+
+        if (!stop.getRoute().getId().equals(routeId)) {
+            throw new BusinessException("La parada no pertenece a esta ruta", HttpStatus.BAD_REQUEST, "STOP_ROUTE_MISMATCH");
+        }
+
+        stopMapper.updateEntityFromRequest(request, stop);
+        return stopMapper.toResponse(stopRepository.save(stop));
+    }
+
+    // includeInactive solo aplica a ADMIN
+    private boolean canSeeInactive(boolean includeInactive) {
+        return includeInactive && SecurityUtils.hasRole("ADMIN");
     }
 
     // buscar rutas que conecten dos ciudades específicas

@@ -8,6 +8,7 @@ import com.web.dto.ticket.TicketCreateRequest;
 import com.web.dto.ticket.TicketResponse;
 import com.web.dto.ticket.reservations.SeatHoldRequest;
 import com.web.dto.ticket.reservations.SeatHoldResponse;
+import com.web.dto.trip.SeatAvailabilityResponse;
 import com.web.dto.trip.SeatStatusResponse;
 import com.web.dto.trip.TripResponse;
 import com.web.entity.Bus;
@@ -223,8 +224,7 @@ class PassengerTripFlowIntegrationTest extends BaseIntegrationTest {
                                 .andReturn();
 
                 List<SeatStatusResponse> seats = om.readValue(
-                                seatsResult.getResponse().getContentAsString(),
-                                om.getTypeFactory().constructCollectionType(List.class, SeatStatusResponse.class));
+                seatsResult.getResponse().getContentAsString(), SeatAvailabilityResponse.class).seats();
 
                 assertThat(seats).isNotEmpty();
                 assertThat(seats.size()).isEqualTo(40);
@@ -282,8 +282,7 @@ class PassengerTripFlowIntegrationTest extends BaseIntegrationTest {
                                 .andReturn();
 
                 List<SeatStatusResponse> seatsAfter = om.readValue(
-                                seatsAfterResult.getResponse().getContentAsString(),
-                                om.getTypeFactory().constructCollectionType(List.class, SeatStatusResponse.class));
+                seatsAfterResult.getResponse().getContentAsString(), SeatAvailabilityResponse.class).seats();
 
                 SeatStatusResponse purchasedSeat = seatsAfter.stream()
                                 .filter(s -> s.seatNumber() == seatNumber)

@@ -393,9 +393,9 @@ class BugFixRegressionIntegrationTest extends BaseIntegrationTest {
         createUser(new RegisterRequest("Admin", "admin@test.com", "300", "secreto1", User.Role.ADMIN));
         String adminToken = login("admin@test.com", "secreto1");
 
-        // Con un viaje programado no se puede eliminar
+        // Con un viaje programado no se puede eliminar (conflicto)
         mvc.perform(delete("/api/v1/routes/{id}", route.getId()).header("Authorization", "Bearer " + adminToken))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isConflict());
 
         trip.setTripDate(LocalDate.now().minusDays(10));
         trip.setDepartureTime(LocalDate.now().minusDays(10).atTime(12, 0));
@@ -404,8 +404,13 @@ class BugFixRegressionIntegrationTest extends BaseIntegrationTest {
         mvc.perform(delete("/api/v1/routes/{id}", route.getId()).header("Authorization", "Bearer " + adminToken))
                 .andExpect(status().isNoContent());
 
-        // La ruta sigue existiendo (los viajes históricos la referencian) pero queda inactiva
+        // La ruta sigue existiendo (los viajes históricos la referencian) pero queda inactiva:
+        // el público ya no la ve y un ADMIN la consulta con includeInactive
         mvc.perform(get("/api/v1/routes/{id}", route.getId()))
+                .andExpect(status().isNotFound());
+        mvc.perform(get("/api/v1/routes/{id}", route.getId())
+                        .header("Authorization", "Bearer " + adminToken)
+                        .param("includeInactive", "true"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.isActive").value(false));
     }

@@ -360,9 +360,9 @@ class ProjectRequirementsIntegrationTest extends BaseIntegrationTest {
         String adminToken = staff("admin@test.com", User.Role.ADMIN);
         LocalDate date = trip.getTripDate();
 
-        // El bus ya tiene un viaje ese día
+        // El bus ya tiene un viaje que se solapa (12:00-14:00)
         createTrip(adminToken, new TripCreateRequest(route.getId(), bus.getId(), date,
-                date.atTime(18, 0), date.atTime(20, 0)))
+                date.atTime(13, 0), date.atTime(15, 0)))
                 .andExpect(status().isConflict());
         // Llegada anterior a la salida
         createTrip(adminToken, new TripCreateRequest(route.getId(), bus.getId(), date.plusDays(1),

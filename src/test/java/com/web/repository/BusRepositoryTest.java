@@ -30,6 +30,9 @@ class BusRepositoryTest extends BaseRepositoryTest {
     @Autowired
     private BusRepository busRepository;
 
+    @Autowired
+    private TripRepository tripRepository;
+
     private Bus bus1;
     private Bus bus2;
     private Bus busInMaintenance;
@@ -126,7 +129,7 @@ class BusRepositoryTest extends BaseRepositoryTest {
     }
 
     @Test
-    @DisplayName("Debe encontrar buses disponibles (no en uso en horario específico)")
+    @DisplayName("Disponibilidad por franja: un bus está ocupado solo si su viaje se solapa con el horario")
     void shouldFindAvailableBuses() {
         // Given - crear una ruta y un viaje usando bus1
         Route route = Route.builder()
@@ -154,18 +157,14 @@ class BusRepositoryTest extends BaseRepositoryTest {
         entityManager.persist(trip);
         entityManager.flush();
 
-        // When - buscar buses disponibles en horario que NO solapa
-        LocalDateTime searchDeparture = LocalDateTime.of(2024, 6, 15, 15, 0);
-        LocalDateTime searchArrival = searchDeparture.plusMinutes(420);
-        List<Bus> availableBuses = busRepository.findAvailableBuses(
-                LocalDate.of(2024, 6, 15),
-                searchDeparture,
-                searchArrival
-        );
+        // When - franja que NO solapa (después de la llegada) y franja que sí solapa
+        LocalDateTime laterDeparture = LocalDateTime.of(2024, 6, 15, 15, 0);
+        List<Long> busyLater = tripRepository.findBusIdsWithOverlappingTrips(laterDeparture, laterDeparture.plusMinutes(420));
+        List<Long> busyOverlap = tripRepository.findBusIdsWithOverlappingTrips(departureTime.plusHours(2), arrivalEta.plusHours(2));
 
-        // Then - bus1 está ocupado, bus2 debería estar disponible (busInMaintenance no es ACTIVE)
-        assertThat(availableBuses).hasSize(1);
-        assertThat(availableBuses.get(0).getPlate()).isEqualTo("DEF456");
+        // Then - el mismo día el bus puede hacer un segundo viaje si no se solapa
+        assertThat(busyLater).isEmpty();
+        assertThat(busyOverlap).containsExactly(bus1.getId());
     }
 
     @Test
@@ -218,22 +217,5 @@ class BusRepositoryTest extends BaseRepositoryTest {
 
         // Then
         assertThat(buses).isEmpty();
-    }
-
-    @Test
-    @DisplayName("No debe incluir buses en mantenimiento en búsqueda de disponibles")
-    void shouldNotIncludeMaintenanceBusesInAvailableSearch() {
-        // When - buscar buses disponibles
-        LocalDateTime searchDeparture = LocalDateTime.of(2024, 6, 15, 8, 0);
-        LocalDateTime searchArrival = searchDeparture.plusMinutes(420);
-        List<Bus> availableBuses = busRepository.findAvailableBuses(
-                LocalDate.of(2024, 6, 15),
-                searchDeparture,
-                searchArrival
-        );
-
-        // Then
-        assertThat(availableBuses).doesNotContain(busInMaintenance);
-        assertThat(availableBuses).allMatch(bus -> bus.getStatus() == Bus.BusStatus.ACTIVE);
     }
 }

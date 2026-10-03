@@ -123,7 +123,7 @@ class DispatchControllerTest {
                 1L, 1L, "Route Name", "Origin", "Destination",
                 1L, "ABC123", 40,
                 LocalDate.now(), LocalDateTime.now(), null,
-                Trip.TripStatus.BOARDING, 0, 0.0
+                Trip.TripStatus.BOARDING, 0, 0.0, null, null, null, null
         );
 
         when(boardingService.openBoarding(1L)).thenReturn(resp);
@@ -142,7 +142,7 @@ class DispatchControllerTest {
                 1L, 1L, "Route Name", "Origin", "Destination",
                 1L, "ABC123", 40,
                 LocalDate.now(), LocalDateTime.now(), null,
-                Trip.TripStatus.SCHEDULED, 0, 0.0
+                Trip.TripStatus.SCHEDULED, 0, 0.0, null, null, null, null
         );
 
         when(boardingService.closeBoarding(1L)).thenReturn(resp);
@@ -169,7 +169,7 @@ class DispatchControllerTest {
                 1L, 1L, "Route Name", "Origin", "Destination",
                 1L, "ABC123", 40,
                 LocalDate.now(), LocalDateTime.now(), null,
-                Trip.TripStatus.DEPARTED, 0, 0.0
+                Trip.TripStatus.DEPARTED, 0, 0.0, null, null, null, null
         );
 
         when(boardingService.departTrip(1L)).thenReturn(resp);
@@ -622,7 +622,7 @@ class DispatchControllerTest {
                 1L, 1L, "Route Name", "Origin", "Destination",
                 1L, "ABC123", 40,
                 LocalDate.now(), LocalDateTime.now(), null,
-                Trip.TripStatus.ARRIVED, 0, 0.0
+                Trip.TripStatus.ARRIVED, 0, 0.0, null, null, null, null
         );
         when(boardingService.arriveTrip(1L)).thenReturn(resp);
 

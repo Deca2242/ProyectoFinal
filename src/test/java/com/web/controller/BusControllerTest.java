@@ -4,7 +4,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.web.dto.catalog.Bus.BusCreateRequest;
 import com.web.dto.catalog.Bus.BusResponse;
 import com.web.dto.catalog.Bus.BusUpdateRequest;
+import com.web.dto.catalog.Seat.SeatResponse;
+import com.web.dto.catalog.Seat.SeatUpdateRequest;
 import com.web.entity.Bus;
+import com.web.entity.Seat;
 import com.web.config.CustomUserDetailsService;
 import com.web.config.SecurityConfig;
 import com.web.exception.BusinessException;
@@ -23,6 +26,7 @@ import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.not;
@@ -127,12 +131,93 @@ class BusControllerTest {
     void getAvailableBuses_shouldReturn200() throws Exception {
         var resp = List.of(new BusResponse(1L, "ABC123", 40, null, Bus.BusStatus.ACTIVE));
 
-        when(busService.getAvailableBuses(any(LocalDate.class))).thenReturn(resp);
+        when(busService.getAvailableBuses(LocalDate.now(), null, null)).thenReturn(resp);
 
         mvc.perform(get("/api/v1/buses/available")
                         .param("date", LocalDate.now().toString()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].id").value(1));
+    }
+
+    // Verifica que se puedan consultar buses disponibles por franja horaria
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void getAvailableBuses_withTimeSlot_shouldPassItToService() throws Exception {
+        LocalDateTime departure = LocalDateTime.of(2030, 1, 15, 14, 0);
+        LocalDateTime arrival = LocalDateTime.of(2030, 1, 15, 18, 0);
+        when(busService.getAvailableBuses(null, departure, arrival)).thenReturn(List.of());
+
+        mvc.perform(get("/api/v1/buses/available")
+                        .param("departureTime", "2030-01-15T14:00:00")
+                        .param("arrivalEta", "2030-01-15T18:00:00"))
+                .andExpect(status().isOk());
+
+        verify(busService).getAvailableBuses(null, departure, arrival);
+    }
+
+    // GET/PUT /buses/{id}/seats
+
+    // Verifica que un DISPATCHER pueda consultar las sillas de un bus
+    @Test
+    @WithMockUser(roles = "DISPATCHER")
+    void getSeats_shouldReturn200() throws Exception {
+        when(busService.getSeats(1L)).thenReturn(List.of(
+                new SeatResponse(1L, 1L, 1, Seat.SeatType.STANDARD),
+                new SeatResponse(2L, 1L, 2, Seat.SeatType.PREFERENTIAL)));
+
+        mvc.perform(get("/api/v1/buses/1/seats"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[1].seatType").value("PREFERENTIAL"));
+    }
+
+    // Verifica que un ADMIN pueda marcar una silla como preferencial
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void updateSeat_shouldReturn200() throws Exception {
+        var req = new SeatUpdateRequest(Seat.SeatType.PREFERENTIAL);
+        when(busService.updateSeat(1L, 3, req)).thenReturn(new SeatResponse(3L, 1L, 3, Seat.SeatType.PREFERENTIAL));
+
+        mvc.perform(put("/api/v1/buses/1/seats/3").contentType(MediaType.APPLICATION_JSON)
+                        .content(om.writeValueAsString(req)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.seatNumber").value(3))
+                .andExpect(jsonPath("$.seatType").value("PREFERENTIAL"));
+    }
+
+    // Verifica que el tipo de silla sea obligatorio
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void updateSeat_shouldReturn400WhenSeatTypeMissing() throws Exception {
+        mvc.perform(put("/api/v1/buses/1/seats/3").contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.validationErrors.seatType").exists());
+
+        verifyNoInteractions(busService);
+    }
+
+    // Verifica que un DISPATCHER no pueda cambiar el tipo de una silla
+    @Test
+    @WithMockUser(roles = "DISPATCHER")
+    void updateSeat_shouldReturn403WhenNotAdmin() throws Exception {
+        mvc.perform(put("/api/v1/buses/1/seats/3").contentType(MediaType.APPLICATION_JSON)
+                        .content(om.writeValueAsString(new SeatUpdateRequest(Seat.SeatType.PREFERENTIAL))))
+                .andExpect(status().isForbidden());
+
+        verifyNoInteractions(busService);
+    }
+
+    // Verifica que una silla inexistente devuelva 404
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void updateSeat_shouldReturn404WhenSeatNotFound() throws Exception {
+        var req = new SeatUpdateRequest(Seat.SeatType.PREFERENTIAL);
+        when(busService.updateSeat(1L, 99, req)).thenThrow(new ResourceNotFoundException("Silla 99 del bus 1 no encontrada"));
+
+        mvc.perform(put("/api/v1/buses/1/seats/99").contentType(MediaType.APPLICATION_JSON)
+                        .content(om.writeValueAsString(req)))
+                .andExpect(status().isNotFound());
     }
 
     // Verifica que un ADMIN pueda actualizar los datos de un bus
@@ -363,13 +448,13 @@ class BusControllerTest {
                 .andExpect(status().isUnauthorized());
     }
 
-    // Verifica que falte el parámetro obligatorio date y devuelva 400
+    // Verifica que sin fecha ni franja horaria devuelva 400
     @Test
     @WithMockUser(roles = "DISPATCHER")
     void getAvailableBuses_shouldReturn400WhenDateMissing() throws Exception {
         mvc.perform(get("/api/v1/buses/available"))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.message").value("Parámetro inválido o faltante en la petición"));
+                .andExpect(jsonPath("$.message").value("Debe proporcionar la fecha o la franja horaria (departureTime y arrivalEta)"));
 
         verifyNoInteractions(busService);
     }
@@ -459,14 +544,29 @@ class BusControllerTest {
                 .andExpect(status().isNotFound());
     }
 
-    // Verifica que eliminar un bus referenciado por viajes (violación de FK) devuelva 409
+    // Verifica que retirar un bus con viajes programados devuelva 409
     @Test
     @WithMockUser(roles = "ADMIN")
     void deleteBus_shouldReturn409WhenReferenced() throws Exception {
-        doThrow(new DataIntegrityViolationException("violates foreign key constraint"))
-                .when(busService).deleteBus(1L);
+        doThrow(new BusinessException("El bus tiene viajes programados: reasígnelos antes de retirarlo",
+                HttpStatus.CONFLICT, "BUS_HAS_TRIPS")).when(busService).deleteBus(1L);
 
         mvc.perform(delete("/api/v1/buses/1"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value("El bus tiene viajes programados: reasígnelos antes de retirarlo"));
+    }
+
+    // Verifica que bajar la capacidad por debajo de una silla vendida devuelva 409
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void updateBus_shouldReturn409WhenCapacityBelowSoldSeats() throws Exception {
+        var req = new BusUpdateRequest(20, null, null);
+        when(busService.updateBus(1L, req)).thenThrow(new BusinessException(
+                "Hay tiquetes vendidos hasta la silla 30 en viajes futuros: la capacidad no puede ser menor",
+                HttpStatus.CONFLICT, "CAPACITY_BELOW_SOLD_SEATS"));
+
+        mvc.perform(put("/api/v1/buses/1").contentType(MediaType.APPLICATION_JSON)
+                        .content(om.writeValueAsString(req)))
                 .andExpect(status().isConflict());
     }
 

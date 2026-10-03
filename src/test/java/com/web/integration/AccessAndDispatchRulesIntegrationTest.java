@@ -146,9 +146,9 @@ class AccessAndDispatchRulesIntegrationTest extends BaseIntegrationTest {
                         .param("fromStopId", stopA.getId().toString())
                         .param("toStopId", stopB.getId().toString()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$[0].status").value("HELD"))
-                .andExpect(jsonPath("$[0].available").value(false))
-                .andExpect(jsonPath("$[9].status").value("AVAILABLE"));
+                .andExpect(jsonPath("$.seats[0].status").value("HELD"))
+                .andExpect(jsonPath("$.seats[0].available").value(false))
+                .andExpect(jsonPath("$.seats[9].status").value("AVAILABLE"));
     }
 
     // ---------- Cierre de caja por cajero ----------
