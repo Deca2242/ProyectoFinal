@@ -275,7 +275,7 @@ class DispatcherOverbookingIntegrationTest extends BaseIntegrationTest {
                 null, null, null, null, null, null,
                 null, percentage,
                 null, null, null, null, null,
-                null, null, null, null
+                null, null, null, null, null, null, null, null, null, null, null
         );
         mvc.perform(put("/api/v1/admin/config")
                         .header("Authorization", "Bearer " + adminToken)

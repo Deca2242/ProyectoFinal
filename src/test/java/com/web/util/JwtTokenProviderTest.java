@@ -2,6 +2,8 @@ package com.web.util;
 
 import com.auth0.jwt.JWT;
 import com.auth0.jwt.algorithms.Algorithm;
+import com.auth0.jwt.exceptions.JWTVerificationException;
+import com.auth0.jwt.exceptions.TokenExpiredException;
 import com.auth0.jwt.interfaces.DecodedJWT;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -10,6 +12,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 import java.util.Date;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class JwtTokenProviderTest {
 
@@ -148,5 +151,33 @@ class JwtTokenProviderTest {
         // When / Then
         assertThat(jwtTokenProvider.extractEmail("token.invalido.xyz")).isNull();
         assertThat(jwtTokenProvider.extractEmail("")).isNull();
+    }
+
+    @Test
+    void shouldVerify_WithValidToken_ReturnSubjectAndIssuedAt() {
+        // Given
+        long before = System.currentTimeMillis();
+        String token = jwtTokenProvider.generateToken(EMAIL, ROLE);
+
+        // When
+        DecodedJWT decoded = jwtTokenProvider.verify(token);
+
+        // Then: "iat" (precisión de segundos) es el que el filtro compara con el cambio de contraseña
+        assertThat(decoded.getSubject()).isEqualTo(EMAIL);
+        assertThat(decoded.getIssuedAt()).isNotNull();
+        assertThat(decoded.getIssuedAt().getTime()).isBetween(before - 1_000, System.currentTimeMillis());
+    }
+
+    @Test
+    void shouldVerify_WithInvalidOrExpiredToken_ThrowJwtVerificationException() {
+        // Given
+        ReflectionTestUtils.setField(jwtTokenProvider, "expiration", -60_000L);
+        String expiredToken = jwtTokenProvider.generateToken(EMAIL, ROLE);
+
+        // When / Then
+        assertThatThrownBy(() -> jwtTokenProvider.verify(expiredToken))
+                .isInstanceOf(TokenExpiredException.class);
+        assertThatThrownBy(() -> jwtTokenProvider.verify("abc.def"))
+                .isInstanceOf(JWTVerificationException.class);
     }
 }

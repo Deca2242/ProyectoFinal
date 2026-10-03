@@ -229,7 +229,7 @@ class AdminConfigIntegrationTest extends BaseIntegrationTest {
                                 java.util.Map.of("STUDENT", 25, "SENIOR", 15, "CHILD", 50),
                                 null, null, null, null,
                                 null, null, null, null, null,
-                                null, null, null, null);
+                                null, null, null, null, null, null, null, null, null, null, null);
 
                 mvc.perform(put("/api/v1/admin/config")
                                 .header("Authorization", "Bearer " + adminToken)
@@ -268,7 +268,7 @@ class AdminConfigIntegrationTest extends BaseIntegrationTest {
                                 null, null,
                                 new BigDecimal("90"),
                                 null, null, null, null,
-                                null, null, null, null);
+                                null, null, null, null, null, null, null, null, null, null, null);
 
                 mvc.perform(put("/api/v1/admin/config")
                                 .header("Authorization", "Bearer " + adminToken)

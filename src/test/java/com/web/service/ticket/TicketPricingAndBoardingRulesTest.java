@@ -196,7 +196,7 @@ class TicketPricingAndBoardingRulesTest {
                 BigDecimal.valueOf(90), BigDecimal.valueOf(70), BigDecimal.valueOf(50),
                 BigDecimal.valueOf(30), BigDecimal.ZERO,
                 BigDecimal.valueOf(50000), BigDecimal.valueOf(1.15), BigDecimal.valueOf(1.2), BigDecimal.valueOf(1.1),
-                LocalDateTime.now());
+                LocalDateTime.now(), null, null, null, null, null, null, null);
     }
 
     private void givenConfigDiscounts() {

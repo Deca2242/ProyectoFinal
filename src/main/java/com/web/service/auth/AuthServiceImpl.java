@@ -6,11 +6,13 @@ import com.web.dto.auth.Login.RegisterRequest;
 import com.web.dto.auth.User.UserResponse;
 import com.web.dto.auth.User.mapper.UserMapper;
 import com.web.entity.User;
+import com.web.exception.BusinessException;
 import com.web.exception.EmailAlreadyExistsException;
 import com.web.exception.InvalidCredentialsException;
 import com.web.repository.UserRepository;
 import com.web.util.JwtTokenProvider;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -31,6 +33,12 @@ public class AuthServiceImpl implements AuthService {
     @Override
     @Transactional
     public UserResponse register(RegisterRequest request) {
+        // El registro público solo crea pasajeros: pedir otro rol sin ser ADMIN es un 403 explícito
+        if (request.role() != null && request.role() != User.Role.PASSENGER && !isCurrentUserAdmin()) {
+            throw new BusinessException("Solo un administrador puede registrar usuarios con rol " + request.role(),
+                    HttpStatus.FORBIDDEN, "ROLE_NOT_ALLOWED");
+        }
+
         // El email no distingue mayúsculas: Juan@x.com y juan@x.com son la misma cuenta
         String email = normalizeEmail(request.email());
         if (userRepository.existsByEmail(email)) {
@@ -40,8 +48,8 @@ public class AuthServiceImpl implements AuthService {
         User user = userMapper.toEntity(request);
         user.setEmail(email);
 
-        // El registro público solo crea pasajeros; otros roles requieren un ADMIN autenticado
-        if (user.getRole() == null || !isCurrentUserAdmin()) {
+        // Sin rol explícito se crea un pasajero (también cuando registra un ADMIN)
+        if (user.getRole() == null) {
             user.setRole(User.Role.PASSENGER);
         }
 

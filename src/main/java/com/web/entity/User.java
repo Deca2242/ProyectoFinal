@@ -44,6 +44,10 @@ public class User {
     @Builder.Default
     private LocalDateTime createdAt = LocalDateTime.now();
 
+    // Último cambio de contraseña: los tokens emitidos antes dejan de ser válidos
+    @Column(name = "password_changed_at")
+    private LocalDateTime passwordChangedAt;
+
     // Relaciones
     @OneToMany(mappedBy = "user", cascade = CascadeType.ALL)
     private List<SeatHold> seatHolds;

@@ -6,6 +6,7 @@ import com.web.dto.auth.Login.RegisterRequest;
 import com.web.dto.auth.User.UserResponse;
 import com.web.dto.auth.User.mapper.UserMapper;
 import com.web.entity.User;
+import com.web.exception.BusinessException;
 import com.web.exception.EmailAlreadyExistsException;
 import com.web.exception.InvalidCredentialsException;
 import com.web.repository.UserRepository;
@@ -18,6 +19,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.authentication.TestingAuthenticationToken;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
@@ -199,22 +201,28 @@ class AuthServiceImplTest {
     }
 
     @Test
-    void shouldRegister_RequestingAdminWithoutAuthentication_AssignPassengerRole() {
-        // Given: regresión de escalada de privilegios en el registro público
+    void shouldRegister_RequestingAdminWithoutAuthentication_ThrowRoleNotAllowed() {
+        // Given: regresión de escalada de privilegios en el registro público (ya no se degrada en silencio)
         RegisterRequest request = registerRequest(User.Role.ADMIN);
 
-        // When
-        User saved = registerAndCaptureSavedUser(request);
-
-        // Then
-        assertThat(saved.getRole()).isEqualTo(User.Role.PASSENGER);
+        // When/Then
+        assertRoleNotAllowed(request);
     }
 
     @Test
-    void shouldRegister_RequestingClerkAuthenticatedAsPassenger_AssignPassengerRole() {
+    void shouldRegister_RequestingClerkAuthenticatedAsPassenger_ThrowRoleNotAllowed() {
         // Given
         authenticateAs("ROLE_PASSENGER");
         RegisterRequest request = registerRequest(User.Role.CLERK);
+
+        // When/Then
+        assertRoleNotAllowed(request);
+    }
+
+    @Test
+    void shouldRegister_RequestingPassengerExplicitlyWithoutAuthentication_KeepPassengerRole() {
+        // Given: pedir PASSENGER de forma explícita es lo mismo que no pedir rol
+        RegisterRequest request = registerRequest(User.Role.PASSENGER);
 
         // When
         User saved = registerAndCaptureSavedUser(request);
@@ -250,18 +258,26 @@ class AuthServiceImplTest {
     }
 
     @Test
-    void shouldRegister_WithNotAuthenticatedAdminToken_AssignPassengerRole() {
+    void shouldRegister_WithNotAuthenticatedAdminToken_ThrowRoleNotAllowed() {
         // Given: un token con ROLE_ADMIN pero marcado como no autenticado no otorga privilegios
         Authentication token = new TestingAuthenticationToken("admin@example.com", null, "ROLE_ADMIN");
         token.setAuthenticated(false);
         SecurityContextHolder.getContext().setAuthentication(token);
         RegisterRequest request = registerRequest(User.Role.DISPATCHER);
 
-        // When
-        User saved = registerAndCaptureSavedUser(request);
+        // When/Then
+        assertRoleNotAllowed(request);
+    }
 
-        // Then
-        assertThat(saved.getRole()).isEqualTo(User.Role.PASSENGER);
+    // 403 ROLE_NOT_ALLOWED sin consultar ni guardar nada
+    private void assertRoleNotAllowed(RegisterRequest request) {
+        assertThatThrownBy(() -> authService.register(request))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    assertThat(((BusinessException) ex).getStatus()).isEqualTo(HttpStatus.FORBIDDEN);
+                    assertThat(((BusinessException) ex).getCode()).isEqualTo("ROLE_NOT_ALLOWED");
+                });
+        verifyNoInteractions(userRepository, userMapper, passwordEncoder);
     }
 
     @Test
@@ -280,7 +296,8 @@ class AuthServiceImplTest {
 
     @Test
     void shouldRegister_WithExistingEmail_NotSaveNorEncodePassword() {
-        // Given
+        // Given: un ADMIN registrando un conductor con un email ya usado
+        authenticateAs("ROLE_ADMIN");
         RegisterRequest request = registerRequest(User.Role.DRIVER);
         when(userRepository.existsByEmail("new@example.com")).thenReturn(true);
 

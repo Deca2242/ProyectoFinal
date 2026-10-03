@@ -185,6 +185,8 @@ class UserServiceImplTest {
         verify(userRepository).save(captor.capture());
         assertThat(captor.getValue().getPasswordHash()).isEqualTo("$2a$10$newHash");
         assertThat(captor.getValue().getPasswordHash()).isNotEqualTo("newPassword123");
+        // Los tokens emitidos con la contraseña anterior dejan de valer
+        assertThat(captor.getValue().getPasswordChangedAt()).isNotNull();
     }
 
     @Test

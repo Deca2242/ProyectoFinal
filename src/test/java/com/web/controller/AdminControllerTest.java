@@ -91,7 +91,7 @@ class  AdminControllerTest {
                 BigDecimal.valueOf(50), BigDecimal.valueOf(30), BigDecimal.ZERO,
                 BigDecimal.valueOf(50000), BigDecimal.valueOf(1.15),
                 BigDecimal.valueOf(1.2), BigDecimal.valueOf(1.1),
-                LocalDateTime.now()
+                LocalDateTime.now(), null, null, null, null, null, null, null
         );
 
         when(configService.getConfig()).thenReturn(resp);
@@ -116,7 +116,7 @@ class  AdminControllerTest {
                 BigDecimal.valueOf(95), BigDecimal.valueOf(75),
                 BigDecimal.valueOf(55), BigDecimal.valueOf(35), BigDecimal.ZERO,
                 BigDecimal.valueOf(55000), BigDecimal.valueOf(1.2),
-                BigDecimal.valueOf(1.3), BigDecimal.valueOf(1.15)
+                BigDecimal.valueOf(1.3), BigDecimal.valueOf(1.15), null, null, null, null, null, null, null
         );
 
         var user = User.builder()
@@ -132,7 +132,7 @@ class  AdminControllerTest {
                 BigDecimal.valueOf(55), BigDecimal.valueOf(35), BigDecimal.ZERO,
                 BigDecimal.valueOf(55000), BigDecimal.valueOf(1.2),
                 BigDecimal.valueOf(1.3), BigDecimal.valueOf(1.15),
-                LocalDateTime.now()
+                LocalDateTime.now(), null, null, null, null, null, null, null
         );
 
         when(userRepository.findByEmail("admin@example.com")).thenReturn(Optional.of(user));
@@ -146,16 +146,16 @@ class  AdminControllerTest {
                 .andExpect(jsonPath("$.holdDurationMinutes").value(15));
     }
 
-    // Verifica manejo de error cuando el usuario administrador no existe
+    // Verifica que si el administrador autenticado ya no existe se responda 401 (antes era un 500)
     @Test
     @WithMockUser(username = "admin@example.com", roles = "ADMIN")
-    void updateConfig_shouldReturn404WhenUserNotFound() throws Exception {
+    void updateConfig_shouldReturn401WhenUserNotFound() throws Exception {
         Map<String, Integer> discounts = new HashMap<>();
         var req = new ConfigUpdateRequest(
                 15, null, null, discounts,
                 null, null, null, null,
                 null, null, null, null, null,
-                null, null, null, null
+                null, null, null, null, null, null, null, null, null, null, null
         );
 
         when(userRepository.findByEmail("admin@example.com")).thenReturn(Optional.empty());
@@ -164,7 +164,11 @@ class  AdminControllerTest {
                         .with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(om.writeValueAsString(req)))
-                .andExpect(status().isInternalServerError());
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.status").value(401))
+                .andExpect(jsonPath("$.message").value("Usuario autenticado no encontrado"));
+
+        verifyNoInteractions(configService);
     }
 
     // ---------------------------------------------------------------------
@@ -176,7 +180,7 @@ class  AdminControllerTest {
                 20, null, null, null,
                 null, null, null, null,
                 null, null, null, null, null,
-                null, null, null, null
+                null, null, null, null, null, null, null, null, null, null, null
         );
     }
 
@@ -189,7 +193,7 @@ class  AdminControllerTest {
                 BigDecimal.valueOf(50), BigDecimal.valueOf(30), BigDecimal.ZERO,
                 BigDecimal.valueOf(50000), BigDecimal.valueOf(1.15),
                 BigDecimal.valueOf(1.2), BigDecimal.valueOf(1.1),
-                LocalDateTime.now()
+                LocalDateTime.now(), null, null, null, null, null, null, null
         );
     }
 
@@ -369,7 +373,7 @@ class  AdminControllerTest {
                 new RevenueMetrics(new BigDecimal("1500000"), new BigDecimal("1200000"), new BigDecimal("200000"),
                         new BigDecimal("50000"), new BigDecimal("50000"),
                         Map.of("CASH", new BigDecimal("700000")), Map.of("BOX_OFFICE", new BigDecimal("700000"))),
-                new OperationalMetrics(91.7, null, 4.2, 3, 1, 5),
+                new OperationalMetrics(91.7, null, 4.2, 3, 1, 5, null, null, null, null, java.util.List.of()),
                 new ParcelMetrics(10, 8, 1, 88.9, Map.of("R1", 10), Map.of("A → B", 8), Map.of("A → B", 1)));
     }
 
@@ -454,6 +458,128 @@ class  AdminControllerTest {
                         .param("endDate", "2026-01-01"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.message").value("La fecha final no puede ser anterior a la inicial"));
+    }
+
+    // Verifica que la respuesta de métricas incluya los retrasos y el desglose de puntualidad por ruta
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void getMetrics_shouldIncludeDelaysAndPunctualityByRoute() throws Exception {
+        MetricsResponse sample = sampleMetrics();
+        MetricsResponse withPunctuality = new MetricsResponse(sample.occupancy(), sample.revenue(),
+                new OperationalMetrics(50.0, 100.0, 0.0, 0, 0, 0, 7.5, 15.0, 2.0, 4.0,
+                        java.util.List.of(new com.web.dto.admin.RoutePunctuality(3L, "BOG-TUN", 2, 50.0, 100.0, 7.5))),
+                sample.parcels());
+        when(metricsService.getMetrics(LocalDate.of(2026, 1, 1), LocalDate.of(2026, 1, 31))).thenReturn(withPunctuality);
+
+        mvc.perform(get("/api/v1/admin/metrics")
+                        .param("startDate", "2026-01-01")
+                        .param("endDate", "2026-01-31"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.operational.avgDepartureDelayMin").value(7.5))
+                .andExpect(jsonPath("$.operational.p95DepartureDelayMin").value(15.0))
+                .andExpect(jsonPath("$.operational.avgArrivalDelayMin").value(2.0))
+                .andExpect(jsonPath("$.operational.p95ArrivalDelayMin").value(4.0))
+                .andExpect(jsonPath("$.operational.punctualityByRoute[0].routeCode").value("BOG-TUN"))
+                .andExpect(jsonPath("$.operational.punctualityByRoute[0].trips").value(2))
+                .andExpect(jsonPath("$.operational.punctualityByRoute[0].onTimeDeparturePct").value(50.0));
+    }
+
+    // GET /metrics/punctuality
+
+    // Verifica que un ADMIN consulte los reportes diarios de puntualidad del rango
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void getPunctualityReports_shouldReturn200ForAdmin() throws Exception {
+        var report = new com.web.dto.admin.PunctualityReportResponse(LocalDate.of(2026, 1, 9), 3L, "BOG-TUN",
+                4, 75.0, 50.0, 6.25, 12.0, LocalDateTime.of(2026, 1, 10, 0, 5));
+        when(metricsService.getPunctualityReports(LocalDate.of(2026, 1, 1), LocalDate.of(2026, 1, 31)))
+                .thenReturn(java.util.List.of(report));
+
+        mvc.perform(get("/api/v1/admin/metrics/punctuality")
+                        .param("from", "2026-01-01")
+                        .param("to", "2026-01-31"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].reportDate").value("2026-01-09"))
+                .andExpect(jsonPath("$[0].routeCode").value("BOG-TUN"))
+                .andExpect(jsonPath("$[0].trips").value(4))
+                .andExpect(jsonPath("$[0].onTimeDeparturePct").value(75.0))
+                .andExpect(jsonPath("$[0].avgArrivalDelayMin").value(12.0));
+    }
+
+    // Verifica que los demás roles reciban 403 y sin token 401
+    @ParameterizedTest
+    @ValueSource(strings = {"DISPATCHER", "PASSENGER", "CLERK", "DRIVER"})
+    void getPunctualityReports_shouldReturn403ForOtherRoles(String role) throws Exception {
+        mvc.perform(get("/api/v1/admin/metrics/punctuality")
+                        .with(user("u@test.com").roles(role))
+                        .param("from", "2026-01-01")
+                        .param("to", "2026-01-31"))
+                .andExpect(status().isForbidden());
+
+        mvc.perform(get("/api/v1/admin/metrics/punctuality")
+                        .param("from", "2026-01-01")
+                        .param("to", "2026-01-31"))
+                .andExpect(status().isUnauthorized());
+
+        verifyNoInteractions(metricsService);
+    }
+
+    // Verifica que falte el rango responda 400
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void getPunctualityReports_shouldReturn400WhenParameterMissing() throws Exception {
+        mvc.perform(get("/api/v1/admin/metrics/punctuality").param("from", "2026-01-01"))
+                .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(metricsService);
+    }
+
+    // PUT /config: validaciones nuevas
+
+    // Verifica que un multiplicador menor que 1, un precio base 0 o un precio por kg 0 respondan 400
+    @Test
+    @WithMockUser(username = "admin@example.com", roles = "ADMIN")
+    void updateConfig_withMultiplierBelowOneOrNonPositivePrices_shouldReturn400() throws Exception {
+        mvc.perform(put("/api/v1/admin/config")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"ticketPriceMultiplierPeakHours\": 0.9, \"ticketBasePrice\": 0, \"baggagePricePerKg\": 0}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.validationErrors.ticketPriceMultiplierPeakHours").exists())
+                .andExpect(jsonPath("$.validationErrors.ticketBasePrice").exists())
+                .andExpect(jsonPath("$.validationErrors.baggagePricePerKg").exists());
+
+        verifyNoInteractions(configService);
+    }
+
+    // Verifica que las claves operativas nuevas se validen (ocupación mínima 0-1, intentos de OTP >= 1)
+    @Test
+    @WithMockUser(username = "admin@example.com", roles = "ADMIN")
+    void updateConfig_withOperationalLimitsOutOfRange_shouldReturn400() throws Exception {
+        mvc.perform(put("/api/v1/admin/config")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"overbookingMinOccupancy\": 1.2, \"parcelOtpMaxAttempts\": 0, \"baggageWeightMax\": 0}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.validationErrors.overbookingMinOccupancy").exists())
+                .andExpect(jsonPath("$.validationErrors.parcelOtpMaxAttempts").exists())
+                .andExpect(jsonPath("$.validationErrors.baggageWeightMax").exists());
+
+        verifyNoInteractions(configService);
+    }
+
+    // Verifica que la política de reembolso no monótona rechazada por el servicio responda 400
+    @Test
+    @WithMockUser(username = "admin@example.com", roles = "ADMIN")
+    void updateConfig_withNonMonotonicRefundPolicy_shouldReturn400() throws Exception {
+        when(userRepository.findByEmail("admin@example.com"))
+                .thenReturn(Optional.of(User.builder().id(1L).email("admin@example.com").build()));
+        when(configService.updateConfig(any(), eq(1L))).thenThrow(new BusinessException(
+                "La política de reembolso debe ser no creciente", HttpStatus.BAD_REQUEST, "REFUND_POLICY_NOT_MONOTONIC"));
+
+        mvc.perform(put("/api/v1/admin/config")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"refundPercentage24Hours\": 95}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(containsString("no creciente")));
     }
 }
 

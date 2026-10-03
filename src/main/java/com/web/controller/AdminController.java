@@ -3,19 +3,22 @@ package com.web.controller;
 import com.web.dto.admin.ConfigResponse;
 import com.web.dto.admin.ConfigUpdateRequest;
 import com.web.dto.admin.MetricsResponse;
+import com.web.dto.admin.PunctualityReportResponse;
+import com.web.exception.BusinessException;
 import com.web.repository.UserRepository;
 import com.web.service.admin.ConfigService;
 import com.web.service.admin.MetricsService;
+import com.web.util.SecurityUtils;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDate;
+import java.util.List;
 
 
 @RestController
@@ -43,7 +46,6 @@ public class AdminController {
         return ResponseEntity.ok(response);
     }
 
-    // Obtiene el ID del usuario autenticado desde el contexto de seguridad
     // KPIs: ocupación, ingresos, puntualidad, no-show, cancelaciones y encomiendas en un rango de fechas
     @GetMapping("/metrics")
     public ResponseEntity<MetricsResponse> getMetrics(
@@ -52,11 +54,20 @@ public class AdminController {
         return ResponseEntity.ok(metricsService.getMetrics(startDate, endDate));
     }
 
+    // Reportes diarios de puntualidad por ruta generados por el job nocturno
+    @GetMapping("/metrics/punctuality")
+    public ResponseEntity<List<PunctualityReportResponse>> getPunctualityReports(
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
+        return ResponseEntity.ok(metricsService.getPunctualityReports(from, to));
+    }
+
+    // Obtiene el ID del usuario autenticado desde el contexto de seguridad (401 si ya no existe)
     private Long getCurrentUserId() {
-        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-        String email = authentication.getName();
-        return userRepository.findByEmail(email)
-                .orElseThrow(() -> new RuntimeException("Usuario no encontrado: " + email))
+        return SecurityUtils.currentUsername()
+                .flatMap(userRepository::findByEmail)
+                .orElseThrow(() -> new BusinessException("Usuario autenticado no encontrado",
+                        HttpStatus.UNAUTHORIZED, "USER_NOT_FOUND"))
                 .getId();
     }
 }

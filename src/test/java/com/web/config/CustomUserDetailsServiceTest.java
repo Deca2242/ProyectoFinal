@@ -94,6 +94,22 @@ class CustomUserDetailsServiceTest {
     }
 
     @Test
+    void shouldLoadUserByUsername_CarryPasswordChangedAtForTokenRevocation() {
+        // Given
+        User user = buildUser(User.Role.DRIVER, User.Status.ACTIVE);
+        java.time.LocalDateTime changedAt = java.time.LocalDateTime.of(2026, 3, 1, 9, 30);
+        user.setPasswordChangedAt(changedAt);
+        when(userRepository.findByEmail("usuario@test.com")).thenReturn(Optional.of(user));
+
+        // When
+        UserDetails details = customUserDetailsService.loadUserByUsername("usuario@test.com");
+
+        // Then: el filtro JWT la compara con el "iat" del token
+        assertThat(details).isInstanceOf(SecurityUser.class);
+        assertThat(((SecurityUser) details).getPasswordChangedAt()).isEqualTo(changedAt);
+    }
+
+    @Test
     void shouldLoadUserByUsername_WithNonExistentEmail_ThrowUsernameNotFoundException() {
         // Given
         when(userRepository.findByEmail("noexiste@test.com")).thenReturn(Optional.empty());

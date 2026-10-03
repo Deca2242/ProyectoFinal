@@ -62,7 +62,7 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(ex.getStatus()).body(error);
     }
 
-    // Maneja excepciones cuando se excede el límite de overbooking (400)
+    // Maneja excepciones cuando se excede el límite de overbooking (403)
     @ExceptionHandler(OverbookingNotAllowedException.class)
     public ResponseEntity<ErrorResponse> handleOverbookingNotAllowed(OverbookingNotAllowedException ex) {
         ErrorResponse error = new ErrorResponse(

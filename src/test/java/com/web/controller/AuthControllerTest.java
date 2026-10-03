@@ -249,6 +249,38 @@ class AuthControllerTest {
                 .andExpect(jsonPath("$.message").value("El email 'ana@example.com' ya está registrado"));
     }
 
+    // Verifica que pedir un rol distinto de PASSENGER sin ser ADMIN devuelva 403 (no se degrada en silencio)
+    @Test
+    void register_shouldReturn403WhenRoleNotAllowed() throws Exception {
+        var req = new RegisterRequest("Ana", "ana@example.com", "3001234567", "password123", User.Role.ADMIN);
+
+        when(authService.register(any())).thenThrow(new com.web.exception.BusinessException(
+                "Solo un administrador puede registrar usuarios con rol ADMIN",
+                org.springframework.http.HttpStatus.FORBIDDEN, "ROLE_NOT_ALLOWED"));
+
+        mvc.perform(post("/api/v1/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(om.writeValueAsString(req)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.status").value(403))
+                .andExpect(jsonPath("$.message").value("Solo un administrador puede registrar usuarios con rol ADMIN"));
+    }
+
+    // Verifica que una contraseña de menos de 8 caracteres o un nombre de más de 100 sean 400 sin llamar al servicio
+    @Test
+    void register_shouldReturn400WhenPasswordTooShortOrNameTooLong() throws Exception {
+        var req = new RegisterRequest("n".repeat(101), "ana@example.com", "3001234567", "corta12", null);
+
+        mvc.perform(post("/api/v1/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(om.writeValueAsString(req)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.validationErrors.password").exists())
+                .andExpect(jsonPath("$.validationErrors.name").exists());
+
+        verifyNoInteractions(authService);
+    }
+
     // Verifica que una violación de unicidad en BD (carrera entre registros) devuelva 409
     @Test
     void register_shouldReturn409WhenDataIntegrityViolation() throws Exception {

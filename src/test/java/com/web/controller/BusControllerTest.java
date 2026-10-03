@@ -290,8 +290,8 @@ class BusControllerTest {
     // Verifica que un token JWT válido de un ADMIN permita el acceso a través del filtro real
     @Test
     void getAllBuses_shouldReturn200WithValidJwtToken() throws Exception {
-        when(jwtTokenProvider.validateToken("token-valido")).thenReturn(true);
-        when(jwtTokenProvider.extractEmail("token-valido")).thenReturn("admin@example.com");
+        com.auth0.jwt.interfaces.DecodedJWT jwt = validJwt();
+        when(jwtTokenProvider.verify("token-valido")).thenReturn(jwt);
         when(customUserDetailsService.loadUserByUsername("admin@example.com")).thenReturn(
                 User.withUsername("admin@example.com").password("x").roles("ADMIN").build());
         when(busService.getAllBuses()).thenReturn(List.of());
@@ -303,7 +303,8 @@ class BusControllerTest {
     // Verifica que un token JWT inválido no autentique la petición (401)
     @Test
     void getAllBuses_shouldReturn401WithInvalidJwtToken() throws Exception {
-        when(jwtTokenProvider.validateToken("token-invalido")).thenReturn(false);
+        when(jwtTokenProvider.verify("token-invalido"))
+                .thenThrow(new com.auth0.jwt.exceptions.JWTDecodeException("token inválido"));
 
         mvc.perform(get("/api/v1/buses").header("Authorization", "Bearer token-invalido"))
                 .andExpect(status().isUnauthorized());
@@ -314,8 +315,8 @@ class BusControllerTest {
     // Verifica que un usuario desactivado con token aún vigente no quede autenticado (401)
     @Test
     void getAllBuses_shouldReturn401WhenUserDisabled() throws Exception {
-        when(jwtTokenProvider.validateToken("token-valido")).thenReturn(true);
-        when(jwtTokenProvider.extractEmail("token-valido")).thenReturn("admin@example.com");
+        com.auth0.jwt.interfaces.DecodedJWT jwt = validJwt();
+        when(jwtTokenProvider.verify("token-valido")).thenReturn(jwt);
         when(customUserDetailsService.loadUserByUsername("admin@example.com")).thenReturn(
                 User.withUsername("admin@example.com").password("x").roles("ADMIN").disabled(true).build());
 
@@ -323,6 +324,13 @@ class BusControllerTest {
                 .andExpect(status().isUnauthorized());
 
         verifyNoInteractions(busService);
+    }
+
+    // Token decodificado del ADMIN de prueba (el filtro JWT usa JwtTokenProvider.verify)
+    private static com.auth0.jwt.interfaces.DecodedJWT validJwt() {
+        com.auth0.jwt.interfaces.DecodedJWT jwt = org.mockito.Mockito.mock(com.auth0.jwt.interfaces.DecodedJWT.class);
+        when(jwt.getSubject()).thenReturn("admin@example.com");
+        return jwt;
     }
 
     // Verifica que un id no numérico en la URL devuelva 400

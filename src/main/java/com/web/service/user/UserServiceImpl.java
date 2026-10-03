@@ -16,8 +16,10 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 
 
 @Service
@@ -66,6 +68,7 @@ public class UserServiceImpl implements UserService {
         // El mapper no toca el hash: la nueva contraseña (opcional) se cifra aquí
         if (request.password() != null && !request.password().isBlank()) {
             user.setPasswordHash(passwordEncoder.encode(request.password()));
+            user.setPasswordChangedAt(LocalDateTime.now());
         }
 
         User updatedUser = userRepository.save(user);
@@ -82,6 +85,7 @@ public class UserServiceImpl implements UserService {
         User user = userRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Usuario", id));
 
+        ensureNotLastActiveAdmin(user);
         user.setStatus(User.Status.INACTIVE);
         userRepository.save(user);
 
@@ -113,6 +117,17 @@ public class UserServiceImpl implements UserService {
         return userMapper.toResponseList(users.stream().sorted(Comparator.comparing(User::getId)).toList());
     }
 
+    // Igual que getUsers(role, status) y, si viene "q", filtra por nombre, email o teléfono (sin distinguir mayúsculas)
+    @Override
+    @Transactional(readOnly = true)
+    public List<UserResponse> getUsers(User.Role role, User.Status status, String q) {
+        if (q == null || q.isBlank()) {
+            return getUsers(role, status);
+        }
+        String pattern = "%" + q.trim().toLowerCase(Locale.ROOT) + "%";
+        return userMapper.toResponseList(userRepository.search(role, status, pattern));
+    }
+
     // Activa o desactiva un usuario; el filtro JWT rechaza los tokens de usuarios inactivos
     @Override
     @Transactional
@@ -123,6 +138,9 @@ public class UserServiceImpl implements UserService {
         if (status == User.Status.INACTIVE && isCurrentUser(user)) {
             throw new BusinessException("Un administrador no puede desactivarse a sí mismo",
                     HttpStatus.BAD_REQUEST, "CANNOT_DEACTIVATE_SELF");
+        }
+        if (status == User.Status.INACTIVE) {
+            ensureNotLastActiveAdmin(user);
         }
 
         user.setStatus(status);
@@ -140,6 +158,9 @@ public class UserServiceImpl implements UserService {
         if (isCurrentUser(user) && role != user.getRole()) {
             throw new BusinessException("Un administrador no puede cambiar su propio rol",
                     HttpStatus.BAD_REQUEST, "CANNOT_CHANGE_OWN_ROLE");
+        }
+        if (role != User.Role.ADMIN) {
+            ensureNotLastActiveAdmin(user);
         }
 
         user.setRole(role);
@@ -162,7 +183,19 @@ public class UserServiceImpl implements UserService {
                     HttpStatus.BAD_REQUEST, "INVALID_CURRENT_PASSWORD");
         }
         user.setPasswordHash(passwordEncoder.encode(request.newPassword()));
+        // Los tokens emitidos antes de este momento dejan de ser válidos (incluido el de esta petición)
+        user.setPasswordChangedAt(LocalDateTime.now());
         userRepository.save(user);
+    }
+
+    // Siempre debe quedar al menos un ADMIN activo: no se puede desactivar ni degradar al último,
+    // aunque lo intente otro administrador (los ADMIN activos se bloquean para que dos cambios simultáneos no los dejen en cero)
+    private void ensureNotLastActiveAdmin(User user) {
+        if (user.getRole() == User.Role.ADMIN && user.getStatus() == User.Status.ACTIVE
+                && userRepository.lockByRoleAndStatus(User.Role.ADMIN, User.Status.ACTIVE).size() <= 1) {
+            throw new BusinessException("No se puede desactivar ni cambiar el rol del último administrador activo",
+                    HttpStatus.CONFLICT, "LAST_ADMIN");
+        }
     }
 
     private User currentUser() {

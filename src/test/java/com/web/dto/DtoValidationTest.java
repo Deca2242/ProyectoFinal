@@ -1,6 +1,9 @@
 package com.web.dto;
 
 import com.web.dto.admin.ConfigUpdateRequest;
+import com.web.dto.auth.Login.LoginRequest;
+import com.web.dto.auth.Login.RegisterRequest;
+import com.web.dto.auth.User.PasswordChangeRequest;
 import com.web.dto.baggage.BaggageCreateRequest;
 import com.web.dto.catalog.Bus.BusCreateRequest;
 import com.web.dto.catalog.Bus.BusUpdateRequest;
@@ -50,7 +53,7 @@ class DtoValidationTest {
         return new ConfigUpdateRequest(holdDuration, null, null, discounts,
                 null, null, null, overbookingMax,
                 null, null, null, null, null,
-                null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null);
     }
 
     @Test
@@ -125,12 +128,120 @@ class DtoValidationTest {
         ConfigUpdateRequest request = new ConfigUpdateRequest(null, 101, -1, null,
                 new BigDecimal("-1"), null, new BigDecimal("-100"), null,
                 new BigDecimal("100.01"), null, null, null, new BigDecimal("-1"),
-                new BigDecimal("-0.01"), null, null, null);
+                new BigDecimal("-0.01"), null, null, null, null, null, null, null, null, null, null);
 
         // When/Then
         assertThat(invalidPaths(request)).containsExactlyInAnyOrder(
                 "noShowFeePercentage", "overbookingPercentage", "baggageWeightLimit", "noShowFee",
                 "refundPercentage48Hours", "refundPercentageLess6Hours", "ticketBasePrice");
+    }
+
+    // Request con solo los precios y los límites operativos informados
+    private static ConfigUpdateRequest pricesAndLimits(BigDecimal pricePerKg, BigDecimal basePrice, BigDecimal multiplier,
+                                                       Double weightMax, Integer otpAttempts, Integer maxHolds,
+                                                       Integer noShowWindow, Double minOccupancy, Integer overbookingWindow) {
+        return new ConfigUpdateRequest(null, null, null, null,
+                null, pricePerKg, null, null,
+                null, null, null, null, null,
+                basePrice, multiplier, multiplier, multiplier,
+                weightMax, otpAttempts, maxHolds, noShowWindow, minOccupancy, overbookingWindow, true);
+    }
+
+    @Test
+    void shouldAcceptConfigUpdate_WithPricesAndOperationalLimitsAtTheLimits() {
+        // Given: multiplicador 1.0 (sin recargo), ocupación 0 y 1, ventanas 0
+        ConfigUpdateRequest min = pricesAndLimits(new BigDecimal("0.01"), new BigDecimal("0.01"), BigDecimal.ONE,
+                0.1, 1, 1, 0, 0.0, 0);
+        ConfigUpdateRequest max = pricesAndLimits(new BigDecimal("9999"), new BigDecimal("999999"), new BigDecimal("3"),
+                200.0, 10, 50, 120, 1.0, 1440);
+
+        // When/Then
+        assertThat(validator.validate(min)).isEmpty();
+        assertThat(validator.validate(max)).isEmpty();
+    }
+
+    @Test
+    void shouldRejectConfigUpdate_WithMultiplierBelowOneAndNonPositivePrices() {
+        // Given: un multiplicador < 1 abarataría el pasaje en hora pico o alta demanda
+        ConfigUpdateRequest request = pricesAndLimits(BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("0.99"),
+                null, null, null, null, null, null);
+
+        // When/Then
+        assertThat(invalidPaths(request)).containsExactlyInAnyOrder(
+                "baggagePricePerKg", "ticketBasePrice", "ticketPriceMultiplierPeakHours",
+                "ticketPriceMultiplierHighDemand", "ticketPriceMultiplierMediumDemand");
+    }
+
+    @Test
+    void shouldRejectConfigUpdate_WithOperationalLimitsOutOfRange() {
+        // Given
+        ConfigUpdateRequest request = pricesAndLimits(null, null, null, 0.0, 0, 0, -1, 1.01, 1441);
+
+        // When/Then
+        assertThat(invalidPaths(request)).containsExactlyInAnyOrder(
+                "baggageWeightMax", "parcelOtpMaxAttempts", "maxActiveHoldsPerUserAndTrip",
+                "noShowWindowMinutes", "overbookingMinOccupancy", "overbookingWindowMinutes");
+    }
+
+    // ---------- RegisterRequest / LoginRequest / PasswordChangeRequest ----------
+
+    private static RegisterRequest register(String name, String email, String phone, String password) {
+        return new RegisterRequest(name, email, phone, password, null);
+    }
+
+    @Test
+    void shouldAcceptRegister_WithValuesAtColumnLimits() {
+        // Given: longitudes máximas de las columnas de "users" (V1) y contraseña de 8 caracteres
+        String email = "a".repeat(60) + "@" + "b".repeat(60) + "." + "c".repeat(20) + ".com"; // 146
+        RegisterRequest request = register("n".repeat(100), email, "3".repeat(20), "12345678");
+
+        // When/Then
+        assertThat(validator.validate(request)).isEmpty();
+    }
+
+    @Test
+    void shouldRejectRegister_WithShortPassword() {
+        // Given
+        RegisterRequest request = register("Ana", "ana@test.com", "300", "1234567");
+
+        // When/Then
+        assertThat(invalidPaths(request)).containsExactly("password");
+    }
+
+    @Test
+    void shouldRejectRegister_WithFieldsLongerThanColumns() {
+        // Given: un nombre de 101 caracteres antes llegaba a la BD y fallaba como 409 de integridad
+        RegisterRequest request = register("n".repeat(101), "a".repeat(60) + "@" + "b".repeat(60) + "." + "c".repeat(25) + ".com", "3".repeat(21),
+                "p".repeat(73));
+
+        // When/Then
+        assertThat(invalidPaths(request)).containsExactlyInAnyOrder("name", "email", "phone", "password");
+    }
+
+    @Test
+    void shouldRejectLogin_WithTooLongValues() {
+        // Given
+        LoginRequest request = new LoginRequest("a".repeat(60) + "@" + "b".repeat(60) + "." + "c".repeat(25) + ".com", "p".repeat(73));
+
+        // When/Then
+        assertThat(invalidPaths(request)).containsExactlyInAnyOrder("email", "password");
+        assertThat(validator.validate(new LoginRequest("ana@test.com", "x"))).isEmpty();
+    }
+
+    @Test
+    void shouldRejectPasswordChange_WithNewPasswordEqualToCurrent() {
+        // Given
+        PasswordChangeRequest request = new PasswordChangeRequest("misma12345", "misma12345");
+
+        // When/Then
+        assertThat(invalidPaths(request)).containsExactly("newPasswordDifferent");
+    }
+
+    @Test
+    void shouldRejectPasswordChange_WithShortNewPassword_AndAcceptValidOne() {
+        // When/Then
+        assertThat(invalidPaths(new PasswordChangeRequest("actual123", "corta"))).containsExactly("newPassword");
+        assertThat(validator.validate(new PasswordChangeRequest("actual123", "nueva12345"))).isEmpty();
     }
 
     // ---------- BusCreateRequest / BusUpdateRequest ----------

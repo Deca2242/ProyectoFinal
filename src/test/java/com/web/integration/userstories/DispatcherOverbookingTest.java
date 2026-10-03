@@ -108,7 +108,7 @@ class DispatcherOverbookingTest {
                 BigDecimal.valueOf(10), BigDecimal.ZERO,
                 BigDecimal.valueOf(50000), BigDecimal.valueOf(1.2), BigDecimal.valueOf(1.15),
                 BigDecimal.valueOf(1.05),
-                java.time.LocalDateTime.now()
+                java.time.LocalDateTime.now(), null, null, null, null, null, null, null
         );
 
         when(configService.getConfig()).thenReturn(config);

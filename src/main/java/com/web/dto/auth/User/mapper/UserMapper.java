@@ -26,6 +26,7 @@ public interface UserMapper {
     @Mapping(target = "driverAssignments", ignore = true)
     @Mapping(target = "dispatcherAssignments", ignore = true)
     @Mapping(target = "reportedIncidents", ignore = true)
+    @Mapping(target = "passwordChangedAt", ignore = true)
     User toEntity(RegisterRequest request);
     
     // Update parcial
@@ -40,6 +41,7 @@ public interface UserMapper {
     @Mapping(target = "driverAssignments", ignore = true)
     @Mapping(target = "dispatcherAssignments", ignore = true)
     @Mapping(target = "reportedIncidents", ignore = true)
+    @Mapping(target = "passwordChangedAt", ignore = true)
     @BeanMapping(nullValuePropertyMappingStrategy = NullValuePropertyMappingStrategy.IGNORE)
     void updateEntityFromRequest(UserUpdateRequest request, @MappingTarget User user);
 }
