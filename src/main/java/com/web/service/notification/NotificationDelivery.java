@@ -30,4 +30,22 @@ public class NotificationDelivery {
         }
         return notificationRepository.save(notification);
     }
+
+    // Envío por el canal simulado sin dejar registro (teléfonos que no son de un usuario, p. ej. encomiendas);
+    // devuelve si el envío tuvo éxito
+    public boolean sendOnly(Notification.Channel channel, String recipient, String message) {
+        try {
+            notificationSender.send(channel, recipient, message);
+            return true;
+        } catch (RuntimeException e) {
+            log.warn("Falló el envío {} a {}: {}", channel, recipient, e.getMessage());
+            return false;
+        }
+    }
+
+    // Solo registra (en transacción propia) un aviso ya enviado
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public Notification record(Notification notification) {
+        return notificationRepository.save(notification);
+    }
 }

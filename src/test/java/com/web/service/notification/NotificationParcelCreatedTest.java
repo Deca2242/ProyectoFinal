@@ -39,7 +39,7 @@ class NotificationParcelCreatedTest {
     @Mock
     private UserRepository userRepository;
     @Mock
-    private NotificationSender notificationSender;
+    private NotificationDelivery notificationDelivery;
     @Mock
     private NotificationMapper notificationMapper;
 
@@ -69,15 +69,18 @@ class NotificationParcelCreatedTest {
         // Given: ninguno de los dos teléfonos es de un usuario registrado
         when(userRepository.findFirstByPhone(anyString())).thenReturn(Optional.empty());
 
+        when(notificationDelivery.sendOnly(any(), anyString(), anyString())).thenReturn(true);
+
         // When
         notificationService.notifyParcelCreated(parcel, "123456");
 
         // Then: el móvil (3...) va por WhatsApp, el fijo por SMS; solo el destinatario recibe el OTP
-        verify(notificationSender).send(eq(Notification.Channel.SMS), eq("6015551234"), contains("123456"));
+        verify(notificationDelivery).sendOnly(eq(Notification.Channel.SMS), eq("6015551234"), contains("123456"));
         ArgumentCaptor<String> senderMessage = ArgumentCaptor.forClass(String.class);
-        verify(notificationSender).send(eq(Notification.Channel.WHATSAPP), eq("3001112233"), senderMessage.capture());
+        verify(notificationDelivery).sendOnly(eq(Notification.Channel.WHATSAPP), eq("3001112233"), senderMessage.capture());
         assertThat(senderMessage.getValue()).contains("PCL-1").doesNotContain("123456");
         // Sin usuario no queda registro (la notificación exige user_id)
+        verify(notificationDelivery, never()).record(any());
         verifyNoInteractions(notificationRepository);
     }
 
@@ -87,13 +90,14 @@ class NotificationParcelCreatedTest {
         User receiver = User.builder().id(3L).phone("6015551234").build();
         when(userRepository.findFirstByPhone("6015551234")).thenReturn(Optional.of(receiver));
         when(userRepository.findFirstByPhone("3001112233")).thenReturn(Optional.empty());
+        when(notificationDelivery.sendOnly(any(), anyString(), anyString())).thenReturn(true);
 
         // When
         notificationService.notifyParcelCreated(parcel, "123456");
 
         // Then: el registro guarda el mensaje con el OTP enmascarado
         ArgumentCaptor<Notification> captor = ArgumentCaptor.forClass(Notification.class);
-        verify(notificationRepository).save(captor.capture());
+        verify(notificationDelivery).record(captor.capture());
         Notification saved = captor.getValue();
         assertThat(saved.getUser()).isSameAs(receiver);
         assertThat(saved.getType()).isEqualTo(Notification.NotificationType.PARCEL_CREATED);
@@ -105,13 +109,15 @@ class NotificationParcelCreatedTest {
 
     @Test
     void shouldNotifyParcelCreated_WhenSenderFails_NotPropagate() {
-        // Given
-        doThrow(new RuntimeException("gateway caído")).when(notificationSender)
-                .send(any(), anyString(), anyString());
-        when(userRepository.findFirstByPhone(anyString())).thenReturn(Optional.empty());
+        // Given: el envío falla y el destinatario es usuario registrado
+        when(notificationDelivery.sendOnly(any(), anyString(), anyString())).thenReturn(false);
+        User receiver = User.builder().id(3L).phone("6015551234").build();
+        when(userRepository.findFirstByPhone("6015551234")).thenReturn(Optional.of(receiver));
+        when(userRepository.findFirstByPhone("3001112233")).thenReturn(Optional.empty());
 
-        // When/Then: un fallo del envío nunca hace fallar el registro de la encomienda
+        // When/Then: un fallo del envío nunca hace fallar el registro de la encomienda, y queda como FAILED
         assertThatCode(() -> notificationService.notifyParcelCreated(parcel, "123456")).doesNotThrowAnyException();
-        verify(notificationSender, times(2)).send(any(), anyString(), anyString());
+        verify(notificationDelivery, times(2)).sendOnly(any(), anyString(), anyString());
+        verify(notificationDelivery).record(argThat(n -> n.getStatus() == Notification.NotificationStatus.FAILED));
     }
 }

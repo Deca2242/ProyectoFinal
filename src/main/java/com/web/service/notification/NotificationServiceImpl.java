@@ -255,30 +255,51 @@ public class NotificationServiceImpl implements NotificationService {
     }
 
     // Remitente y destinatario de una encomienda no tienen por qué ser usuarios: siempre se envía al teléfono,
-    // pero solo queda registro si el teléfono pertenece a un usuario (la notificación exige usuario)
+    // pero solo queda registro si el teléfono pertenece a un usuario (la notificación exige usuario).
+    // Como el resto de avisos, se entrega cuando la transacción de negocio confirma
     private void sendToPhone(String phone, String message, String loggedMessage, Trip trip) {
         if (phone == null || phone.isBlank()) {
             return;
         }
         String recipient = phone.trim();
         Notification.Channel channel = resolveChannel(recipient);
-        Notification.NotificationStatus status = Notification.NotificationStatus.SENT;
-        try {
-            notificationSender.send(channel, recipient, message);
-        } catch (RuntimeException e) {
-            log.warn("Falló el envío {} a {}: {}", channel, recipient, e.getMessage());
-            status = Notification.NotificationStatus.FAILED;
+        User user = userRepository.findFirstByPhone(recipient).orElse(null);
+        runAfterCommit(() -> {
+            boolean sent = notificationDelivery.sendOnly(channel, recipient, message);
+            if (user != null) {
+                recordQuietly(Notification.builder()
+                        .user(user)
+                        .channel(channel)
+                        .type(Notification.NotificationType.PARCEL_CREATED)
+                        .recipient(recipient)
+                        .message(loggedMessage)
+                        .trip(trip)
+                        .status(sent ? Notification.NotificationStatus.SENT : Notification.NotificationStatus.FAILED)
+                        .createdAt(LocalDateTime.now())
+                        .build());
+            }
+        });
+    }
+
+    private void runAfterCommit(Runnable action) {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    action.run();
+                }
+            });
+        } else {
+            action.run();
         }
-        Notification.NotificationStatus finalStatus = status;
-        userRepository.findFirstByPhone(recipient).ifPresent(user -> notificationRepository.save(Notification.builder()
-                .user(user)
-                .channel(channel)
-                .type(Notification.NotificationType.PARCEL_CREATED)
-                .recipient(recipient)
-                .message(loggedMessage)
-                .trip(trip)
-                .status(finalStatus)
-                .createdAt(LocalDateTime.now())
-                .build()));
+    }
+
+    private void recordQuietly(Notification notification) {
+        try {
+            notificationDelivery.record(notification);
+        } catch (RuntimeException e) {
+            log.warn("No se pudo registrar la notificación {} para {}: {}",
+                    notification.getType(), notification.getRecipient(), e.getMessage());
+        }
     }
 }

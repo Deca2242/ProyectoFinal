@@ -142,8 +142,10 @@ class DispatchFlowIntegrationTest extends BaseIntegrationTest {
         mvc.perform(get("/api/v1/trips/{id}/baggage", trip.getId()).header("Authorization", bearer(driverToken)))
                 .andExpect(status().isOk());
 
-        // Abrir abordaje y abordar
+        // Abrir abordaje y abordar: la compra por la app queda pendiente de pago, el conductor cobra al subir
         boarding(dispatcherToken, "open").andExpect(status().isOk()).andExpect(jsonPath("$.status").value("BOARDING"));
+        board(driverToken, qr(boarded)).andExpect(status().isConflict());
+        payOnBoarding(driverToken, boarded);
         board(driverToken, qr(boarded)).andExpect(status().isOk());
 
         // Cerrar abordaje: marca no-show y registra boardingClosedAt; repetirlo no cambia nada
@@ -469,6 +471,15 @@ class DispatchFlowIntegrationTest extends BaseIntegrationTest {
                 .header("Authorization", bearer(token))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(om.writeValueAsString(new OverbookingPolicyCreateRequest(start, end, new BigDecimal(percentage)))));
+    }
+
+    private void payOnBoarding(String driverToken, Long ticketId) throws Exception {
+        mvc.perform(post("/api/v1/payments/confirm")
+                        .header("Authorization", bearer(driverToken))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(om.writeValueAsString(new com.web.dto.payment.PaymentConfirmRequest(
+                                ticketId, Ticket.PaymentMethod.CASH, null, null, null))))
+                .andExpect(status().isOk());
     }
 
     private ResultActions purchase(String token, Long passengerId, int seat) throws Exception {

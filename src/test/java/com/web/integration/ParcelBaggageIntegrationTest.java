@@ -110,8 +110,6 @@ class ParcelBaggageIntegrationTest extends BaseIntegrationTest {
         String clerk = staff("clerk@test.com", User.Role.CLERK);
         String driver = staff("driver@test.com", User.Role.DRIVER);
         String dispatcher = staff("disp@test.com", User.Role.DISPATCHER);
-        // El destinatario es un usuario registrado: queda registro de su notificación (sin el OTP)
-        createUser(new RegisterRequest("Destinatario", "dest@test.com", "3005550001", "secreto1", User.Role.PASSENGER));
         assignDriver("driver@test.com");
 
         JsonNode created = createParcel(clerk, "3005550001");
@@ -126,12 +124,7 @@ class ParcelBaggageIntegrationTest extends BaseIntegrationTest {
         Parcel stored = parcelRepository.findById(parcelId).orElseThrow();
         assertThat(stored.getDeliveryOtp()).hasSize(64).isNotEqualTo(otp);
         assertThat(stored.getDescription()).isEqualTo("Caja con documentos");
-        List<Notification> notifications = notificationRepository.findByTripIdOrderByCreatedAtDescIdDesc(trip.getId());
-        assertThat(notifications).singleElement().satisfies(n -> {
-            assertThat(n.getType()).isEqualTo(Notification.NotificationType.PARCEL_CREATED);
-            assertThat(n.getRecipient()).isEqualTo("3005550001");
-            assertThat(n.getMessage()).contains(code).doesNotContain(otp);
-        });
+        // El aviso al destinatario se entrega al confirmar la transacción: se verifica en NotificationsIntegrationTest
 
         // Con el viaje aún programado no se puede cargar al bus
         parcelStatus(driver, code, Parcel.ParcelStatus.IN_TRANSIT, null, null)

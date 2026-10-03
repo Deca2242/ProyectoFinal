@@ -417,6 +417,37 @@ class NotificationsIntegrationTest extends BaseIntegrationTest {
 
     // ---------- Helpers ----------
 
+    // Encomienda: el destinatario registrado recibe el aviso con el código de rastreo pero sin el OTP en claro
+    @Test
+    void parcelCreated_shouldNotifyRegisteredReceiverWithoutPlainOtp() throws Exception {
+        String receiver = registerAndLogin("destinatario@test.com", "3005550001");
+        String clerk = staff("clerk-enc@test.com", User.Role.CLERK);
+
+        String body = mvc.perform(post("/api/v1/parcels")
+                        .header("Authorization", bearer(clerk))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(om.writeValueAsString(new com.web.dto.parcel.ParcelCreateRequest(
+                                trip.getId(), "Remitente", "6015550000", "Destinatario", "3005550001",
+                                stopA.getId(), null, stopC.getId(), null,
+                                new BigDecimal("15000"), new BigDecimal("2.5"), "Caja con documentos"))))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        JsonNode created = om.readTree(body);
+        String code = created.get("code").asText();
+        String otp = created.get("deliveryOtp").asText();
+
+        mvc.perform(get("/api/v1/notifications/me").header("Authorization", bearer(receiver)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].type").value("PARCEL_CREATED"))
+                .andExpect(jsonPath("$[0].channel").value("WHATSAPP"))
+                .andExpect(jsonPath("$[0].status").value("SENT"))
+                .andExpect(jsonPath("$[0].tripId").value(trip.getId()))
+                .andExpect(jsonPath("$[0].message").value(containsString(code)))
+                .andExpect(jsonPath("$[0].message").value(containsString("******")))
+                .andExpect(jsonPath("$[0].message").value(org.hamcrest.Matchers.not(containsString(otp))));
+    }
+
     private ResultActions purchase(String token, Long passengerId, int seat, Stop from, Stop to) throws Exception {
         TicketCreateRequest request = new TicketCreateRequest(
                 trip.getId(), passengerId, seat,
