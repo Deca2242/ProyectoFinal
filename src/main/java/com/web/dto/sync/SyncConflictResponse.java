@@ -14,6 +14,9 @@ public record SyncConflictResponse(
         String code,
         String reason,
         String payload,
-        LocalDateTime createdAt
+        LocalDateTime createdAt,
+        // Revisión del conflicto (NULL mientras siga abierto)
+        LocalDateTime resolvedAt,
+        Long resolvedById
 ) implements Serializable {
 }

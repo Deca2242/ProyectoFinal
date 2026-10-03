@@ -14,6 +14,7 @@ import com.web.entity.SyncConflict;
 import com.web.entity.Ticket;
 import com.web.entity.User;
 import com.web.exception.BusinessException;
+import com.web.exception.InvalidStateTransitionException;
 import com.web.exception.ResourceNotFoundException;
 import com.web.exception.SeatNotAvailableException;
 import com.web.repository.SyncBatchRepository;
@@ -508,6 +509,24 @@ class SyncServiceImplTest {
     }
 
     @Test
+    void shouldSyncBoardings_WithDataIntegrityViolation_ReturnClearConflictCode() {
+        // Given
+        givenAuthenticatedClerk();
+        givenBatchSaved();
+        OfflineBoarding b1 = new OfflineBoarding("QR-1", LocalDateTime.now().minusMinutes(10));
+        when(processor.syncBoarding(b1)).thenThrow(new DataIntegrityViolationException("duplicate key"));
+
+        // When
+        SyncBatchResponse response = syncService.syncBoardings(new BoardingSyncRequest("phone-1", List.of(b1)));
+
+        // Then
+        assertThat(response.conflicts()).isEqualTo(1);
+        assertThat(response.results().get(0).code()).isEqualTo("DATA_INTEGRITY_VIOLATION");
+        assertThat(savedBatch().getConflictItems()).singleElement()
+                .satisfies(c -> assertThat(c.getCode()).isEqualTo("DATA_INTEGRITY_VIOLATION"));
+    }
+
+    @Test
     void shouldSyncBoardings_WithMoreThanMaxBoardings_ThrowBatchTooLarge() {
         // Given
         List<OfflineBoarding> boardings = new ArrayList<>();
@@ -525,49 +544,47 @@ class SyncServiceImplTest {
     // ---------- getConflicts ----------
 
     @Test
-    void shouldGetConflicts_AsClerk_ReturnOnlyOwnConflicts() {
+    void shouldGetConflicts_AsClerk_ReturnOnlyOwnOpenConflicts() {
         // Given
         givenAuthenticatedClerk();
         List<SyncConflict> conflicts = List.of(SyncConflict.builder().id(1L).build());
         List<SyncConflictResponse> mapped = List.of(mock(SyncConflictResponse.class));
-        when(syncConflictRepository.findByBatchUserIdOrderByCreatedAtDescIdDesc(7L)).thenReturn(conflicts);
+        when(syncConflictRepository.search(7L, null, false)).thenReturn(conflicts);
         when(syncMapper.toConflictResponseList(conflicts)).thenReturn(mapped);
 
         // When
-        List<SyncConflictResponse> result = syncService.getConflicts(null);
+        List<SyncConflictResponse> result = syncService.getConflicts(null, false);
 
         // Then
         assertThat(result).isSameAs(mapped);
-        verify(syncConflictRepository, never()).findAllByOrderByCreatedAtDescIdDesc();
     }
 
     @Test
-    void shouldGetConflicts_AsClerkWithDevice_FilterByUserAndDevice() {
+    void shouldGetConflicts_AsClerkWithDeviceAndResolved_FilterByUserDeviceAndResolved() {
         // Given
         givenAuthenticatedClerk();
-        when(syncConflictRepository.findByBatchUserIdAndBatchDeviceIdOrderByCreatedAtDescIdDesc(7L, "tablet-1"))
-                .thenReturn(List.of());
+        when(syncConflictRepository.search(7L, "tablet-1", true)).thenReturn(List.of());
         when(syncMapper.toConflictResponseList(List.of())).thenReturn(List.of());
 
         // When
-        List<SyncConflictResponse> result = syncService.getConflicts("tablet-1");
+        List<SyncConflictResponse> result = syncService.getConflicts("tablet-1", true);
 
         // Then
         assertThat(result).isEmpty();
     }
 
     @Test
-    void shouldGetConflicts_AsAdmin_ReturnAllConflicts() {
+    void shouldGetConflicts_AsAdmin_ReturnConflictsOfAllUsers() {
         // Given
         authenticate("admin@test.com", "ADMIN");
-        when(syncConflictRepository.findAllByOrderByCreatedAtDescIdDesc()).thenReturn(List.of());
+        when(syncConflictRepository.search(null, null, false)).thenReturn(List.of());
         when(syncMapper.toConflictResponseList(List.of())).thenReturn(List.of());
 
         // When
-        syncService.getConflicts("  ");
+        syncService.getConflicts("  ", false);
 
         // Then
-        verify(syncConflictRepository).findAllByOrderByCreatedAtDescIdDesc();
+        verify(syncConflictRepository).search(null, null, false);
         verifyNoInteractions(userRepository);
     }
 
@@ -575,14 +592,98 @@ class SyncServiceImplTest {
     void shouldGetConflicts_AsAdminWithDevice_FilterByDevice() {
         // Given
         authenticate("admin@test.com", "ADMIN");
-        when(syncConflictRepository.findByBatchDeviceIdOrderByCreatedAtDescIdDesc("tablet-1")).thenReturn(List.of());
+        when(syncConflictRepository.search(null, "tablet-1", false)).thenReturn(List.of());
         when(syncMapper.toConflictResponseList(List.of())).thenReturn(List.of());
 
         // When
-        syncService.getConflicts("tablet-1");
+        syncService.getConflicts("tablet-1", false);
 
         // Then
-        verify(syncConflictRepository).findByBatchDeviceIdOrderByCreatedAtDescIdDesc("tablet-1");
+        verify(syncConflictRepository).search(null, "tablet-1", false);
+    }
+
+    // ---------- resolveConflict ----------
+
+    private SyncConflict conflictOf(User owner) {
+        SyncBatch batch = SyncBatch.builder().id(100L).user(owner).deviceId("tablet-1").type(SyncBatch.SyncType.TICKETS).build();
+        return SyncConflict.builder().id(9L).batch(batch).code("SEAT_NOT_AVAILABLE").build();
+    }
+
+    @Test
+    void shouldResolveConflict_AsOwnerClerk_SetResolvedAtAndResolvedBy() {
+        // Given
+        givenAuthenticatedClerk();
+        SyncConflict conflict = conflictOf(clerk);
+        SyncConflictResponse mapped = mock(SyncConflictResponse.class);
+        when(syncConflictRepository.findById(9L)).thenReturn(Optional.of(conflict));
+        when(syncConflictRepository.save(conflict)).thenReturn(conflict);
+        when(syncMapper.toConflictResponse(conflict)).thenReturn(mapped);
+
+        // When
+        SyncConflictResponse result = syncService.resolveConflict(9L);
+
+        // Then
+        assertThat(result).isSameAs(mapped);
+        assertThat(conflict.getResolvedAt()).isNotNull();
+        assertThat(conflict.getResolvedBy()).isSameAs(clerk);
+    }
+
+    @Test
+    void shouldResolveConflict_AsDispatcher_ResolveConflictOfOtherUser() {
+        // Given
+        User dispatcher = User.builder().id(20L).email("disp@test.com").role(User.Role.DISPATCHER).build();
+        authenticate("disp@test.com", "DISPATCHER");
+        when(userRepository.findByEmail("disp@test.com")).thenReturn(Optional.of(dispatcher));
+        SyncConflict conflict = conflictOf(clerk);
+        when(syncConflictRepository.findById(9L)).thenReturn(Optional.of(conflict));
+        when(syncConflictRepository.save(conflict)).thenReturn(conflict);
+
+        // When
+        syncService.resolveConflict(9L);
+
+        // Then
+        assertThat(conflict.getResolvedBy()).isSameAs(dispatcher);
+    }
+
+    @Test
+    void shouldResolveConflict_AsClerkOfOtherBatch_ThrowForbidden() {
+        // Given
+        givenAuthenticatedClerk();
+        User otherClerk = User.builder().id(8L).email("otra@test.com").role(User.Role.CLERK).build();
+        when(syncConflictRepository.findById(9L)).thenReturn(Optional.of(conflictOf(otherClerk)));
+
+        // When/Then
+        assertThatThrownBy(() -> syncService.resolveConflict(9L))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    assertThat(((BusinessException) ex).getStatus()).isEqualTo(HttpStatus.FORBIDDEN);
+                    assertThat(((BusinessException) ex).getCode()).isEqualTo("NOT_CONFLICT_OWNER");
+                });
+        verify(syncConflictRepository, never()).save(any());
+    }
+
+    @Test
+    void shouldResolveConflict_AlreadyResolved_ThrowInvalidStateTransition() {
+        // Given
+        givenAuthenticatedClerk();
+        SyncConflict conflict = conflictOf(clerk);
+        conflict.setResolvedAt(LocalDateTime.now().minusHours(1));
+        when(syncConflictRepository.findById(9L)).thenReturn(Optional.of(conflict));
+
+        // When/Then
+        assertThatThrownBy(() -> syncService.resolveConflict(9L))
+                .isInstanceOf(InvalidStateTransitionException.class);
+        verify(syncConflictRepository, never()).save(any());
+    }
+
+    @Test
+    void shouldResolveConflict_WithUnknownId_ThrowNotFound() {
+        // Given
+        when(syncConflictRepository.findById(99L)).thenReturn(Optional.empty());
+
+        // When/Then
+        assertThatThrownBy(() -> syncService.resolveConflict(99L))
+                .isInstanceOf(ResourceNotFoundException.class);
     }
 
     // ---------- Payload ----------

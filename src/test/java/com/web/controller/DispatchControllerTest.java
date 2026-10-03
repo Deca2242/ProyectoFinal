@@ -94,7 +94,7 @@ class DispatchControllerTest {
                 2L, "Dispatcher Name",
                 false, false, false,
                 LocalDateTime.now()
-        , null, null, null, null, null);
+        , null, null, null, null, null, null, null, null, null);
 
         when(assignmentService.assignTrip(any())).thenReturn(resp);
 
@@ -187,7 +187,7 @@ class DispatchControllerTest {
                 2L, "Dispatcher Name",
                 checklistOk, checklistOk, checklistOk,
                 LocalDateTime.now()
-        , null, null, null, null, null);
+        , null, null, null, null, null, null, null, null, null);
     }
 
     // POST /assign
@@ -666,5 +666,191 @@ class DispatchControllerTest {
         mvc.perform(post("/api/v1/trips/1/arrive").with(csrf()))
                 .andExpect(status().isUnprocessableEntity());
     }
-}
 
+    // ---------- Reglas de despacho: estados (422), conductor asignado (403), bus y checklist ----------
+
+    // Verifica que asignar un viaje que ya salió responda 422
+    @Test
+    @WithMockUser(roles = "DISPATCHER")
+    void assignTrip_shouldReturn422WhenTripNotScheduledOrBoarding() throws Exception {
+        when(assignmentService.assignTrip(any())).thenThrow(new InvalidStateTransitionException(
+                "Solo se pueden asignar viajes en estado SCHEDULED o BOARDING (actual: DEPARTED)"));
+
+        mvc.perform(post("/api/v1/trips/1/assign").with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"tripId\":1,\"driverId\":3}"))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("DEPARTED")));
+    }
+
+    // Verifica que dispatcherId sea opcional y que busId llegue al servicio
+    @Test
+    @WithMockUser(roles = "DISPATCHER")
+    void assignTrip_shouldAllowMissingDispatcherIdAndPassBusId() throws Exception {
+        when(assignmentService.assignTrip(any())).thenReturn(assignment(false, 3L));
+
+        mvc.perform(post("/api/v1/trips/1/assign").with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"tripId\":1,\"driverId\":3,\"busId\":12}"))
+                .andExpect(status().isCreated());
+
+        ArgumentCaptor<AssignmentCreateRequest> captor = ArgumentCaptor.forClass(AssignmentCreateRequest.class);
+        verify(assignmentService).assignTrip(captor.capture());
+        assertThat(captor.getValue().tripId()).isEqualTo(1L);
+        assertThat(captor.getValue().dispatcherId()).isNull();
+        assertThat(captor.getValue().busId()).isEqualTo(12L);
+    }
+
+    // Verifica 400 cuando el dispatcherId del body no es el del despachador autenticado
+    @Test
+    @WithMockUser(roles = "DISPATCHER")
+    void assignTrip_shouldReturn400WhenDispatcherIdMismatch() throws Exception {
+        when(assignmentService.assignTrip(any())).thenThrow(new BusinessException(
+                "El dispatcherId no corresponde al despachador autenticado", HttpStatus.BAD_REQUEST, "DISPATCHER_MISMATCH"));
+
+        mvc.perform(post("/api/v1/trips/1/assign").with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"tripId\":1,\"driverId\":3,\"dispatcherId\":99}"))
+                .andExpect(status().isBadRequest());
+    }
+
+    // Verifica 409 cuando el bus pedido ya tiene otro viaje en ese horario
+    @Test
+    @WithMockUser(roles = "DISPATCHER")
+    void assignTrip_shouldReturn409WhenBusBusy() throws Exception {
+        when(assignmentService.assignTrip(any())).thenThrow(new BusinessException(
+                "El bus ya tiene un viaje que se cruza con este horario", HttpStatus.CONFLICT, "BUS_BUSY"));
+
+        mvc.perform(post("/api/v1/trips/1/assign").with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"tripId\":1,\"driverId\":3,\"busId\":12}"))
+                .andExpect(status().isConflict());
+    }
+
+    // Verifica que un conductor no asignado no pueda dar salida (403)
+    @Test
+    @WithMockUser(roles = "DRIVER")
+    void departTrip_shouldReturn403WhenDriverNotAssigned() throws Exception {
+        when(boardingService.departTrip(1L)).thenThrow(new BusinessException(
+                "El conductor no está asignado a este viaje", HttpStatus.FORBIDDEN, "DRIVER_NOT_ASSIGNED"));
+
+        mvc.perform(post("/api/v1/trips/1/depart").with(csrf()))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.message").value("El conductor no está asignado a este viaje"));
+    }
+
+    // Verifica 422 al dar salida a un viaje que no está en abordaje
+    @Test
+    @WithMockUser(roles = "DRIVER")
+    void departTrip_shouldReturn422WhenTripNotBoarding() throws Exception {
+        when(boardingService.departTrip(1L)).thenThrow(new InvalidStateTransitionException(
+                "Solo se puede partir desde estado BOARDING (actual: SCHEDULED)"));
+
+        mvc.perform(post("/api/v1/trips/1/depart").with(csrf()))
+                .andExpect(status().isUnprocessableEntity());
+    }
+
+    // Verifica 400 al dar salida con el SOAT o la revisión vencidos para el día del viaje
+    @Test
+    @WithMockUser(roles = "DRIVER")
+    void departTrip_shouldReturn400WhenChecklistExpired() throws Exception {
+        when(boardingService.departTrip(1L)).thenThrow(new BusinessException(
+                "Checklist vencido para el viaje del 2030-01-15: SOAT vencido el 2030-01-10",
+                HttpStatus.BAD_REQUEST, "CHECKLIST_EXPIRED"));
+
+        mvc.perform(post("/api/v1/trips/1/depart").with(csrf()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("SOAT vencido")));
+    }
+
+    // Verifica 422 al modificar la asignación de un viaje que ya salió
+    @Test
+    @WithMockUser(roles = "DISPATCHER")
+    void updateAssignment_shouldReturn422AfterDeparture() throws Exception {
+        when(assignmentService.getAssignmentByTrip(1L)).thenReturn(assignment(true, 1L));
+        when(assignmentService.updateChecklist(eq(5L), any())).thenThrow(new InvalidStateTransitionException(
+                "La asignación no se puede modificar con el viaje en estado DEPARTED"));
+
+        mvc.perform(put("/api/v1/trips/1/assignment").with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content(om.writeValueAsString(new AssignmentUpdateRequest(null, true, true, true))))
+                .andExpect(status().isUnprocessableEntity());
+    }
+
+    // Verifica 409 al cambiar a un conductor ocupado en ese horario
+    @Test
+    @WithMockUser(roles = "DISPATCHER")
+    void updateAssignment_shouldReturn409WhenDriverBusy() throws Exception {
+        when(assignmentService.getAssignmentByTrip(1L)).thenReturn(assignment(false, 1L));
+        when(assignmentService.updateChecklist(eq(5L), any())).thenThrow(new BusinessException(
+                "El conductor ya tiene un viaje asignado en ese horario", HttpStatus.CONFLICT, "DRIVER_NOT_AVAILABLE"));
+
+        mvc.perform(put("/api/v1/trips/1/assignment").with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content(om.writeValueAsString(new AssignmentUpdateRequest(8L, null, null, null))))
+                .andExpect(status().isConflict());
+    }
+
+    // Verifica que el cambio de bus llegue al servicio
+    @Test
+    @WithMockUser(roles = "DISPATCHER")
+    void updateAssignment_shouldPassBusId() throws Exception {
+        when(assignmentService.getAssignmentByTrip(1L)).thenReturn(assignment(false, 1L));
+        when(assignmentService.updateChecklist(eq(5L), any())).thenReturn(assignment(false, 1L));
+
+        mvc.perform(put("/api/v1/trips/1/assignment").with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"busId\":12}"))
+                .andExpect(status().isOk());
+
+        ArgumentCaptor<AssignmentUpdateRequest> captor = ArgumentCaptor.forClass(AssignmentUpdateRequest.class);
+        verify(assignmentService).updateChecklist(eq(5L), captor.capture());
+        assertThat(captor.getValue().busId()).isEqualTo(12L);
+    }
+
+    // Verifica que un conductor no vea la asignación de un viaje ajeno (403)
+    @Test
+    @WithMockUser(roles = "DRIVER")
+    void getAssignment_shouldReturn403ForOtherDriver() throws Exception {
+        when(assignmentService.getAssignmentByTrip(1L)).thenThrow(new BusinessException(
+                "El conductor no está asignado a este viaje", HttpStatus.FORBIDDEN, "DRIVER_NOT_ASSIGNED"));
+
+        mvc.perform(get("/api/v1/trips/1/assignment"))
+                .andExpect(status().isForbidden());
+    }
+
+    // Verifica que la respuesta incluya la vigencia calculada del checklist
+    @Test
+    @WithMockUser(roles = "DISPATCHER")
+    void getAssignment_shouldIncludeChecklistValidityOnTripDate() throws Exception {
+        LocalDate tripDate = LocalDate.of(2030, 1, 15);
+        when(assignmentService.getAssignmentByTrip(1L)).thenReturn(new AssignmentResponse(
+                5L, 1L, 3L, "Driver Name", "123456789", 2L, "Dispatcher Name",
+                true, true, true, LocalDateTime.now(), "Ruta", tripDate, tripDate.atTime(8, 0), tripDate.atTime(12, 0),
+                "ABC123", tripDate.minusDays(1), tripDate.plusMonths(6), false, true));
+
+        mvc.perform(get("/api/v1/trips/1/assignment"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.soatExpiresAt").value("2030-01-14"))
+                .andExpect(jsonPath("$.soatValidOnTripDate").value(false))
+                .andExpect(jsonPath("$.reviewValidOnTripDate").value(true));
+    }
+
+    // Verifica que un conductor no asignado no vea el equipaje del viaje (403)
+    @Test
+    @WithMockUser(roles = "DRIVER")
+    void getTripBaggage_shouldReturn403ForUnassignedDriver() throws Exception {
+        org.mockito.Mockito.doThrow(new BusinessException("El conductor no está asignado a este viaje",
+                HttpStatus.FORBIDDEN, "DRIVER_NOT_ASSIGNED")).when(assignmentService).requireAssignedDriver(1L);
+
+        mvc.perform(get("/api/v1/trips/1/baggage"))
+                .andExpect(status().isForbidden());
+
+        verifyNoInteractions(baggageSummaryService);
+    }
+
+    // Verifica 409 al abrir el abordaje sin conductor asignado
+    @Test
+    @WithMockUser(roles = "DISPATCHER")
+    void controlBoarding_open_shouldReturn409WhenNoAssignment() throws Exception {
+        when(boardingService.openBoarding(1L)).thenThrow(new BusinessException(
+                "El viaje necesita una asignación con conductor para abrir el abordaje",
+                HttpStatus.CONFLICT, "ASSIGNMENT_REQUIRED"));
+
+        mvc.perform(post("/api/v1/trips/1/boarding/open").with(csrf()))
+                .andExpect(status().isConflict());
+    }
+}

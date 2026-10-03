@@ -198,4 +198,70 @@ class OverbookingPolicyControllerTest {
         mvc.perform(delete("/api/v1/overbooking-policies/1"))
                 .andExpect(status().isUnauthorized());
     }
+
+    // ---------- PUT /overbooking-policies/{id} ----------
+
+    // Verifica que DISPATCHER y ADMIN puedan editar una política
+    @Test
+    @WithMockUser(roles = "DISPATCHER")
+    void updatePolicy_shouldReturn200() throws Exception {
+        when(policyService.updatePolicy(eq(1L), any(OverbookingPolicyCreateRequest.class))).thenReturn(response());
+
+        mvc.perform(put("/api/v1/overbooking-policies/1").contentType(MediaType.APPLICATION_JSON)
+                        .content(body(6, 10, "0.10")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.startHour").value(6))
+                .andExpect(jsonPath("$.endHour").value(10));
+        verify(policyService).updatePolicy(1L, new OverbookingPolicyCreateRequest(6, 10, new BigDecimal("0.10")));
+    }
+
+    // Verifica 400 cuando la hora de inicio no es menor que la de fin
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void updatePolicy_shouldReturn400WhenStartNotBeforeEnd() throws Exception {
+        mvc.perform(put("/api/v1/overbooking-policies/1").contentType(MediaType.APPLICATION_JSON)
+                        .content(body(12, 12, "0.10")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.validationErrors.hourRange").exists());
+        verifyNoInteractions(policyService);
+    }
+
+    // Verifica 409 cuando la nueva franja se solapa con otra política de la ruta
+    @Test
+    @WithMockUser(roles = "DISPATCHER")
+    void updatePolicy_shouldReturn409WhenOverlapping() throws Exception {
+        when(policyService.updatePolicy(eq(1L), any())).thenThrow(new BusinessException(
+                "La franja se solapa", HttpStatus.CONFLICT, "OVERBOOKING_POLICY_OVERLAP"));
+
+        mvc.perform(put("/api/v1/overbooking-policies/1").contentType(MediaType.APPLICATION_JSON)
+                        .content(body(6, 13, "0.10")))
+                .andExpect(status().isConflict());
+    }
+
+    // Verifica 404, 403 y 401 al editar
+    @Test
+    @WithMockUser(roles = "DISPATCHER")
+    void updatePolicy_shouldReturn404WhenNotFound() throws Exception {
+        when(policyService.updatePolicy(eq(99L), any())).thenThrow(new ResourceNotFoundException("Política de overbooking", 99L));
+
+        mvc.perform(put("/api/v1/overbooking-policies/99").contentType(MediaType.APPLICATION_JSON)
+                        .content(body(6, 10, "0.10")))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @WithMockUser(roles = "CLERK")
+    void updatePolicy_shouldReturn403ForClerk() throws Exception {
+        mvc.perform(put("/api/v1/overbooking-policies/1").contentType(MediaType.APPLICATION_JSON)
+                        .content(body(6, 10, "0.10")))
+                .andExpect(status().isForbidden());
+        verifyNoInteractions(policyService);
+    }
+
+    @Test
+    void updatePolicy_shouldReturn401WhenAnonymous() throws Exception {
+        mvc.perform(put("/api/v1/overbooking-policies/1").contentType(MediaType.APPLICATION_JSON)
+                        .content(body(6, 10, "0.10")))
+                .andExpect(status().isUnauthorized());
+    }
 }

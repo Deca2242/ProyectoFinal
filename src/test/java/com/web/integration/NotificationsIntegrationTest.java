@@ -10,27 +10,45 @@ import com.web.entity.*;
 import com.web.integration.userstories.BaseIntegrationTest;
 import com.web.repository.*;
 import com.web.service.notification.NotificationScheduler;
-import jakarta.persistence.EntityManager;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationContext;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.scheduling.config.ScheduledTaskHolder;
+import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-// Notificaciones simuladas por WhatsApp/SMS de extremo a extremo: compra, cambio de andén, cancelación y llegada próxima
+// Notificaciones simuladas por WhatsApp/SMS de extremo a extremo: compra, cambio de andén, cancelación y llegada próxima.
+// Las notificaciones se entregan cuando la operación de negocio confirma (cada una en su propia transacción),
+// así que esta clase corre SIN transacción de prueba: cada petición confirma de verdad y @AfterEach borra lo creado.
+// Las tareas programadas se apagan para que el aviso de llegada próxima solo lo dispare la prueba
+@Transactional(propagation = Propagation.NOT_SUPPORTED)
+@TestPropertySource(properties = "app.scheduling.enabled=false")
 class NotificationsIntegrationTest extends BaseIntegrationTest {
 
     @Autowired
@@ -54,7 +72,8 @@ class NotificationsIntegrationTest extends BaseIntegrationTest {
     @Autowired
     private TicketRepository ticketRepository;
 
-    @Autowired
+    // Spy: delega en el repositorio real salvo cuando una prueba fuerza un fallo al guardar
+    @MockitoSpyBean
     private NotificationRepository notificationRepository;
 
     @Autowired
@@ -64,8 +83,17 @@ class NotificationsIntegrationTest extends BaseIntegrationTest {
     private NotificationScheduler notificationScheduler;
 
     @Autowired
-    private EntityManager entityManager;
+    private TransactionTemplate transactionTemplate;
 
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    private ApplicationContext applicationContext;
+
+    private final List<String> createdEmails = new ArrayList<>();
+    private Route route;
+    private Bus bus;
     private Stop stopA;
     private Stop stopB;
     private Stop stopC;
@@ -73,7 +101,7 @@ class NotificationsIntegrationTest extends BaseIntegrationTest {
 
     @BeforeEach
     void setUp() {
-        Route route = routeRepository.save(Route.builder()
+        route = routeRepository.save(Route.builder()
                 .code("NOT-" + System.nanoTime())
                 .name("Santa Marta - Barranquilla")
                 .origin("Santa Marta")
@@ -86,7 +114,7 @@ class NotificationsIntegrationTest extends BaseIntegrationTest {
         stopB = stopRepository.save(Stop.builder().route(route).name("Ciénaga").order(2).build());
         stopC = stopRepository.save(Stop.builder().route(route).name("Barranquilla").order(3).build());
 
-        Bus bus = busRepository.save(Bus.builder()
+        bus = busRepository.save(Bus.builder()
                 .plate("NOT" + (System.nanoTime() % 100000))
                 .capacity(40)
                 .amenities(new HashMap<>())
@@ -102,8 +130,19 @@ class NotificationsIntegrationTest extends BaseIntegrationTest {
                 .arrivalEta(date.atTime(14, 0))
                 .status(Trip.TripStatus.SCHEDULED)
                 .build());
+    }
 
-        flushAndClear();
+    // Todo lo de esta clase se confirmó: se borra para no afectar a las demás pruebas
+    @AfterEach
+    void cleanUp() {
+        CommittedDataCleaner cleaner = new CommittedDataCleaner(jdbcTemplate);
+        cleaner.delete("routes", List.of(route.getId()));
+        cleaner.delete("buses", List.of(bus.getId()));
+        List<Long> userIds = createdEmails.stream()
+                .flatMap(email -> userRepository.findByEmail(email).stream())
+                .map(User::getId)
+                .toList();
+        cleaner.delete("users", userIds);
     }
 
     // Historia: como pasajero quiero recibir el QR del ticket al comprar
@@ -122,6 +161,7 @@ class NotificationsIntegrationTest extends BaseIntegrationTest {
                 .andExpect(jsonPath("$[0].recipient").value("3001234567"))
                 .andExpect(jsonPath("$[0].ticketId").value(ticket.get("id").asLong()))
                 .andExpect(jsonPath("$[0].tripId").value(trip.getId()))
+                .andExpect(jsonPath("$[0].readAt").doesNotExist())
                 .andExpect(jsonPath("$[0].message").value(containsString(qr)))
                 .andExpect(jsonPath("$[0].message").value(containsString("silla 7")))
                 .andExpect(jsonPath("$[0].message").value(containsString("Santa Marta → Ciénaga")))
@@ -135,6 +175,28 @@ class NotificationsIntegrationTest extends BaseIntegrationTest {
                 .andExpect(jsonPath("$.length()").value(0));
     }
 
+    // REQUIRES_NEW: si guardar la notificación falla, la compra se confirma igual (no queda rollback-only)
+    @Test
+    void purchase_whenSavingNotificationFails_shouldStillCommitTheSale() throws Exception {
+        String token = registerAndLogin("fallo@test.com", "3001234567");
+        doThrow(new DataIntegrityViolationException("violación simulada al guardar la notificación"))
+                .when(notificationRepository).save(any(Notification.class));
+
+        JsonNode ticket = json(purchase(token, userId("fallo@test.com"), 9, stopA, stopC));
+
+        // El ticket quedó confirmado en la base de datos (se lee fuera de la transacción de la compra)
+        Ticket saved = ticketRepository.findById(ticket.get("id").asLong()).orElseThrow();
+        assertThat(saved.getStatus()).isEqualTo(Ticket.TicketStatus.SOLD);
+        assertThat(saved.getSeatNumber()).isEqualTo(9);
+        mvc.perform(get("/api/v1/tickets/{id}", saved.getId()).header("Authorization", bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("SOLD"));
+        // Y no quedó notificación registrada
+        mvc.perform(get("/api/v1/notifications/me").header("Authorization", bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(0));
+    }
+
     // Una venta en taquilla notifica al pasajero, no al cajero; con teléfono fijo se usa SMS
     @Test
     void boxOfficeSale_shouldNotifyPassengerBySmsWhenLandline() throws Exception {
@@ -143,7 +205,6 @@ class NotificationsIntegrationTest extends BaseIntegrationTest {
 
         purchase(clerkToken, userId("fijo@test.com"), 3, stopA, stopC).andExpect(status().isCreated());
 
-        flushAndClear();
         List<Notification> notifications = notificationRepository
                 .findByUserIdOrderByCreatedAtDescIdDesc(userId("fijo@test.com"));
         assertThat(notifications).singleElement().satisfies(n -> {
@@ -180,14 +241,13 @@ class NotificationsIntegrationTest extends BaseIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.changed").value(false));
 
-        flushAndClear();
         assertThat(tripRepository.findById(trip.getId()).orElseThrow().getPlatform()).isEqualTo("B7");
-        List<Notification> platformNotifications = notificationRepository
-                .findByTripIdAndType(trip.getId(), Notification.NotificationType.PLATFORM_CHANGED);
         // Dos cambios efectivos x dos pasajeros con ticket SOLD (Ana tiene dos tickets pero recibe un aviso)
-        assertThat(platformNotifications).hasSize(4)
-                .extracting(n -> n.getUser().getEmail())
-                .containsOnly("ana@test.com", "luis@test.com");
+        List<String> notifiedEmails = inTx(() -> notificationRepository
+                .findByTripIdAndType(trip.getId(), Notification.NotificationType.PLATFORM_CHANGED).stream()
+                .map(n -> n.getUser().getEmail())
+                .toList());
+        assertThat(notifiedEmails).hasSize(4).containsOnly("ana@test.com", "luis@test.com");
 
         mvc.perform(get("/api/v1/notifications/me").header("Authorization", bearer(luis)))
                 .andExpect(status().isOk())
@@ -209,6 +269,37 @@ class NotificationsIntegrationTest extends BaseIntegrationTest {
                 .andExpect(jsonPath("$.length()").value(8));
     }
 
+    // Marcar como leída: solo el destinatario; unreadOnly filtra las ya leídas
+    @Test
+    void markAsRead_shouldOnlyAllowOwner_andUnreadOnlyShouldHideReadNotifications() throws Exception {
+        String ana = registerAndLogin("ana@test.com", "3001111111");
+        String luis = registerAndLogin("luis@test.com", "3002222222");
+        purchase(ana, userId("ana@test.com"), 1, stopA, stopC).andExpect(status().isCreated());
+        purchase(ana, userId("ana@test.com"), 2, stopA, stopC).andExpect(status().isCreated());
+        List<Notification> anaNotifications = notificationRepository
+                .findByUserIdOrderByCreatedAtDescIdDesc(userId("ana@test.com"));
+        assertThat(anaNotifications).hasSize(2);
+        Long first = anaNotifications.get(1).getId();
+
+        // Luis no puede marcar una notificación de Ana
+        mvc.perform(patch("/api/v1/notifications/{id}/read", first).header("Authorization", bearer(luis)))
+                .andExpect(status().isForbidden());
+        mvc.perform(patch("/api/v1/notifications/{id}/read", 999999L).header("Authorization", bearer(ana)))
+                .andExpect(status().isNotFound());
+
+        mvc.perform(patch("/api/v1/notifications/{id}/read", first).header("Authorization", bearer(ana)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(first))
+                .andExpect(jsonPath("$.readAt").isNotEmpty());
+
+        mvc.perform(get("/api/v1/notifications/me").param("unreadOnly", "true").header("Authorization", bearer(ana)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].id").value(anaNotifications.get(0).getId()));
+        mvc.perform(get("/api/v1/notifications/me").header("Authorization", bearer(ana)))
+                .andExpect(jsonPath("$.length()").value(2));
+    }
+
     @Test
     void platformChange_shouldBeOnlyForDispatcherAndActiveTrips() throws Exception {
         String passengerToken = registerAndLogin("pax@test.com", "3001234567");
@@ -228,9 +319,9 @@ class NotificationsIntegrationTest extends BaseIntegrationTest {
         Trip departed = tripRepository.findById(trip.getId()).orElseThrow();
         departed.setStatus(Trip.TripStatus.DEPARTED);
         tripRepository.save(departed);
-        flushAndClear();
+        // Cambiar el andén de un viaje que ya salió es un estado inválido para la operación (422)
         changePlatform(dispatcherToken, "A1")
-                .andExpect(status().isBadRequest())
+                .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value(containsString("DEPARTED")));
     }
 
@@ -246,23 +337,22 @@ class NotificationsIntegrationTest extends BaseIntegrationTest {
         mvc.perform(delete("/api/v1/trips/{id}", trip.getId()).header("Authorization", bearer(adminToken)))
                 .andExpect(status().is2xxSuccessful());
 
-        flushAndClear();
         assertThat(ticketRepository.findByTripId(trip.getId()))
                 .allSatisfy(t -> assertThat(t.getStatus()).isEqualTo(Ticket.TicketStatus.CANCELLED));
-        List<Notification> cancelledNotifications = notificationRepository
-                .findByTripIdAndType(trip.getId(), Notification.NotificationType.TRIP_CANCELLED);
-        assertThat(cancelledNotifications)
-                .extracting(n -> n.getUser().getEmail(), Notification::getChannel)
-                .containsExactlyInAnyOrder(
-                        org.assertj.core.groups.Tuple.tuple("ana@test.com", Notification.Channel.WHATSAPP),
-                        org.assertj.core.groups.Tuple.tuple("luis@test.com", Notification.Channel.SMS));
+        List<org.assertj.core.groups.Tuple> cancelled = inTx(() -> notificationRepository
+                .findByTripIdAndType(trip.getId(), Notification.NotificationType.TRIP_CANCELLED).stream()
+                .map(n -> org.assertj.core.groups.Tuple.tuple(n.getUser().getEmail(), n.getChannel()))
+                .toList());
+        assertThat(cancelled).containsExactlyInAnyOrder(
+                org.assertj.core.groups.Tuple.tuple("ana@test.com", Notification.Channel.WHATSAPP),
+                org.assertj.core.groups.Tuple.tuple("luis@test.com", Notification.Channel.SMS));
 
         mvc.perform(get("/api/v1/notifications/me").header("Authorization", bearer(luis)))
                 .andExpect(jsonPath("$[0].type").value("TRIP_CANCELLED"))
                 .andExpect(jsonPath("$[0].message").value(containsString("cancelado")));
     }
 
-    // Aviso de llegada próxima: solo viajes DEPARTED que llegan en 15 min, una única vez
+    // Aviso de llegada próxima: viajes DEPARTED que llegan en 15 min (o ya retrasados), una única vez
     @Test
     void arrivalSoonScheduler_shouldNotifyOnceAndMarkTrip() throws Exception {
         String ana = registerAndLogin("ana@test.com", "3001111111");
@@ -271,11 +361,20 @@ class NotificationsIntegrationTest extends BaseIntegrationTest {
 
         // Otro viaje en curso cuya llegada aún está lejos
         Trip farTrip = tripRepository.save(Trip.builder()
-                .route(trip.getRoute())
-                .bus(trip.getBus())
+                .route(route)
+                .bus(bus)
                 .tripDate(LocalDate.now())
                 .departureTime(LocalDateTime.now().minusHours(1))
                 .arrivalEta(LocalDateTime.now().plusMinutes(40))
+                .status(Trip.TripStatus.DEPARTED)
+                .build());
+        // Viaje retrasado: su ETA ya pasó y sigue en curso sin aviso
+        Trip delayedTrip = tripRepository.save(Trip.builder()
+                .route(route)
+                .bus(bus)
+                .tripDate(LocalDate.now())
+                .departureTime(LocalDateTime.now().minusHours(3))
+                .arrivalEta(LocalDateTime.now().minusMinutes(20))
                 .status(Trip.TripStatus.DEPARTED)
                 .build());
 
@@ -286,12 +385,11 @@ class NotificationsIntegrationTest extends BaseIntegrationTest {
         Ticket ticket = ticketRepository.findById(noShow).orElseThrow();
         ticket.setStatus(Ticket.TicketStatus.NO_SHOW);
         ticketRepository.save(ticket);
-        flushAndClear();
 
         notificationScheduler.notifyUpcomingArrivals();
-        flushAndClear();
 
         assertThat(tripRepository.findById(trip.getId()).orElseThrow().getArrivalNotified()).isTrue();
+        assertThat(tripRepository.findById(delayedTrip.getId()).orElseThrow().getArrivalNotified()).isTrue();
         assertThat(tripRepository.findById(farTrip.getId()).orElseThrow().getArrivalNotified()).isFalse();
         assertThat(notificationRepository.findByTripIdAndType(trip.getId(), Notification.NotificationType.ARRIVAL_SOON))
                 .singleElement()
@@ -299,7 +397,6 @@ class NotificationsIntegrationTest extends BaseIntegrationTest {
 
         // Una segunda ejecución no repite el aviso
         notificationScheduler.notifyUpcomingArrivals();
-        flushAndClear();
         assertThat(notificationRepository.findByTripIdAndType(trip.getId(), Notification.NotificationType.ARRIVAL_SOON))
                 .hasSize(1);
         assertThat(notificationRepository.findByTripIdAndType(farTrip.getId(), Notification.NotificationType.ARRIVAL_SOON))
@@ -307,6 +404,15 @@ class NotificationsIntegrationTest extends BaseIntegrationTest {
 
         mvc.perform(get("/api/v1/notifications/me").header("Authorization", bearer(ana)))
                 .andExpect(jsonPath("$[0].type").value("ARRIVAL_SOON"));
+    }
+
+    // Con app.scheduling.enabled=false no se registra ninguna tarea programada
+    @Test
+    void schedulingDisabled_shouldRegisterNoScheduledTasks() {
+        long tasks = applicationContext.getBeanProvider(ScheduledTaskHolder.class).stream()
+                .mapToLong(holder -> holder.getScheduledTasks().size())
+                .sum();
+        assertThat(tasks).isZero();
     }
 
     // ---------- Helpers ----------
@@ -336,11 +442,13 @@ class NotificationsIntegrationTest extends BaseIntegrationTest {
     }
 
     private String staff(String email, User.Role role) throws Exception {
+        createdEmails.add(email);
         createUser(new RegisterRequest("Staff " + role, email, "3009999999", "secreto1", role));
         return login(email, "secreto1");
     }
 
     private String registerAndLogin(String email, String phone) throws Exception {
+        createdEmails.add(email);
         mvc.perform(post("/api/v1/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(om.writeValueAsString(
@@ -366,8 +474,8 @@ class NotificationsIntegrationTest extends BaseIntegrationTest {
         return "Bearer " + token;
     }
 
-    private void flushAndClear() {
-        entityManager.flush();
-        entityManager.clear();
+    // Lecturas que navegan relaciones LAZY (sin transacción de prueba hace falta una propia)
+    private <T> T inTx(Supplier<T> query) {
+        return transactionTemplate.execute(status -> query.get());
     }
 }

@@ -2,10 +2,9 @@ package com.web;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.scheduling.annotation.EnableScheduling;
 
+// Las tareas programadas se activan en config/SchedulingConfig (app.scheduling.enabled)
 @SpringBootApplication
-@EnableScheduling
 public class ProyectoFinalApplication {
 
 	public static void main(String[] args) {

@@ -5,6 +5,7 @@ import com.web.dto.dispatch.OverbookingPolicy.OverbookingPolicyResponse;
 import com.web.entity.OverbookingPolicy;
 import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
+import org.mapstruct.MappingTarget;
 
 import java.util.List;
 
@@ -25,4 +26,11 @@ public interface OverbookingPolicyMapper {
     @Mapping(target = "createdBy", ignore = true)
     @Mapping(target = "createdAt", ignore = true)
     OverbookingPolicy toEntity(OverbookingPolicyCreateRequest request);
+
+    // Edición (PUT): reemplaza franja y porcentaje
+    @Mapping(target = "id", ignore = true)
+    @Mapping(target = "route", ignore = true)
+    @Mapping(target = "createdBy", ignore = true)
+    @Mapping(target = "createdAt", ignore = true)
+    void updateEntityFromRequest(OverbookingPolicyCreateRequest request, @MappingTarget OverbookingPolicy policy);
 }

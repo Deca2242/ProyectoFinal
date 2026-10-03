@@ -40,4 +40,12 @@ public class SyncConflict {
     @Column(name = "created_at", nullable = false, updatable = false)
     @Builder.Default
     private LocalDateTime createdAt = LocalDateTime.now();
+
+    // Revisión del conflicto (NULL = abierto)
+    @Column(name = "resolved_at")
+    private LocalDateTime resolvedAt;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "resolved_by")
+    private User resolvedBy;
 }

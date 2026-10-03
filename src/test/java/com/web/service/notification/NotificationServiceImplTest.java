@@ -21,14 +21,17 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.ArgumentCaptor;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionSynchronizationUtils;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -56,7 +59,7 @@ class NotificationServiceImplTest {
     @Spy
     private NotificationMapper notificationMapper = new NotificationMapperImpl();
 
-    @InjectMocks
+    // Se construye en setUp con un NotificationDelivery real sobre los mocks de repositorio y canal
     private NotificationServiceImpl notificationService;
 
     private Trip trip;
@@ -67,6 +70,8 @@ class NotificationServiceImplTest {
 
     @BeforeEach
     void setUp() {
+        notificationService = new NotificationServiceImpl(notificationRepository, ticketRepository, userRepository,
+                notificationMapper, new NotificationDelivery(notificationRepository, notificationSender));
         Route route = Route.builder().id(1L).name("Ruta").origin("Bogotá").destination("Tunja").build();
         fromStop = Stop.builder().id(10L).name("Terminal Bogotá").order(1).route(route).build();
         toStop = Stop.builder().id(11L).name("Terminal Tunja").order(2).route(route).build();
@@ -207,6 +212,81 @@ class NotificationServiceImplTest {
         // When/Then: no lanza excepción
         notificationService.notifyTicketPurchased(ticket(105L, ana, 2));
         verify(notificationSender).send(any(), anyString(), anyString());
+    }
+
+    @Test
+    void shouldNotifyTicketPurchased_WhenRepositoryThrowsDataIntegrityViolation_NotPropagate() {
+        // Given
+        when(notificationRepository.save(any())).thenThrow(new DataIntegrityViolationException("FK"));
+
+        // When/Then: no lanza excepción (el guardado va en su propia transacción)
+        notificationService.notifyTicketPurchased(ticket(107L, ana, 2));
+        verify(notificationRepository).save(any());
+    }
+
+    // ---------- Entrega al confirmar la transacción de negocio ----------
+
+    @Test
+    void shouldNotifyTicketPurchased_InsideTransaction_DeliverOnlyAfterCommit() {
+        // Given: hay una transacción de negocio en curso
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            // When
+            notificationService.notifyTicketPurchased(ticket(108L, ana, 2));
+
+            // Then: nada sale antes de confirmar
+            verifyNoInteractions(notificationSender, notificationRepository);
+
+            // When: la transacción confirma
+            TransactionSynchronizationUtils.invokeAfterCommit(TransactionSynchronizationManager.getSynchronizations());
+
+            // Then
+            verify(notificationSender).send(eq(Notification.Channel.WHATSAPP), eq("3001234567"), anyString());
+            assertThat(savedNotification().getTicket().getId()).isEqualTo(108L);
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
+    }
+
+    @Test
+    void shouldNotifyTicketPurchased_InsideTransactionThatRollsBack_NotDeliver() {
+        // Given
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            notificationService.notifyTicketPurchased(ticket(109L, ana, 2));
+
+            // When: la compra se deshace (solo afterCompletion, sin afterCommit)
+            TransactionSynchronizationUtils.invokeAfterCompletion(TransactionSynchronizationManager.getSynchronizations(),
+                    TransactionSynchronization.STATUS_ROLLED_BACK);
+
+            // Then
+            verifyNoInteractions(notificationSender, notificationRepository);
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
+    }
+
+    @Test
+    void shouldNotifyPlatformChanged_WhenOneSaveFailsAfterCommit_DeliverTheOthers() {
+        // Given
+        when(ticketRepository.findByTripIdAndStatus(5L, Ticket.TicketStatus.SOLD))
+                .thenReturn(List.of(ticket(1L, ana, 1), ticket(3L, luis, 3)));
+        when(notificationRepository.save(any()))
+                .thenThrow(new DataIntegrityViolationException("FK"))
+                .thenAnswer(inv -> inv.getArgument(0));
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            notificationService.notifyPlatformChanged(trip, "B1");
+
+            // When
+            TransactionSynchronizationUtils.invokeAfterCommit(TransactionSynchronizationManager.getSynchronizations());
+
+            // Then: el fallo del primero no impide el segundo
+            verify(notificationRepository, times(2)).save(any());
+            verify(notificationSender, times(2)).send(any(), anyString(), anyString());
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
     }
 
     @Test
@@ -366,7 +446,7 @@ class NotificationServiceImplTest {
         when(notificationRepository.findByUserIdOrderByCreatedAtDescIdDesc(1L)).thenReturn(List.of(notification));
 
         // When
-        List<NotificationResponse> result = notificationService.getMyNotifications();
+        List<NotificationResponse> result = notificationService.getMyNotifications(false);
 
         // Then
         assertThat(result).singleElement().satisfies(r -> {
@@ -379,9 +459,94 @@ class NotificationServiceImplTest {
     }
 
     @Test
+    void shouldGetMyNotifications_WithUnreadOnly_UseUnreadQuery() {
+        // Given
+        authenticateAna();
+        when(notificationRepository.findByUserIdAndReadAtIsNullOrderByCreatedAtDescIdDesc(1L)).thenReturn(List.of());
+
+        // When
+        List<NotificationResponse> result = notificationService.getMyNotifications(true);
+
+        // Then
+        assertThat(result).isEmpty();
+        verify(notificationRepository, never()).findByUserIdOrderByCreatedAtDescIdDesc(any());
+    }
+
+    // ---------- Marcar como leída ----------
+
+    @Test
+    void shouldMarkAsRead_OwnNotification_SetReadAt() {
+        // Given
+        authenticateAna();
+        Notification notification = Notification.builder().id(50L).user(ana).channel(Notification.Channel.WHATSAPP)
+                .type(Notification.NotificationType.TICKET_PURCHASED).recipient("3001234567").message("hola").build();
+        when(notificationRepository.findById(50L)).thenReturn(Optional.of(notification));
+        when(notificationRepository.save(notification)).thenReturn(notification);
+
+        // When
+        NotificationResponse result = notificationService.markAsRead(50L);
+
+        // Then
+        assertThat(result.readAt()).isNotNull();
+        assertThat(notification.getReadAt()).isNotNull();
+    }
+
+    @Test
+    void shouldMarkAsRead_AlreadyRead_KeepFirstReadAt() {
+        // Given
+        authenticateAna();
+        LocalDateTime firstRead = LocalDateTime.of(2030, 1, 1, 9, 0);
+        Notification notification = Notification.builder().id(50L).user(ana).readAt(firstRead)
+                .channel(Notification.Channel.WHATSAPP).type(Notification.NotificationType.TICKET_PURCHASED)
+                .recipient("3001234567").message("hola").build();
+        when(notificationRepository.findById(50L)).thenReturn(Optional.of(notification));
+
+        // When
+        NotificationResponse result = notificationService.markAsRead(50L);
+
+        // Then
+        assertThat(result.readAt()).isEqualTo(firstRead);
+        verify(notificationRepository, never()).save(any());
+    }
+
+    @Test
+    void shouldMarkAsRead_NotificationOfOtherUser_ThrowForbidden() {
+        // Given
+        authenticateAna();
+        Notification notification = Notification.builder().id(51L).user(luis).build();
+        when(notificationRepository.findById(51L)).thenReturn(Optional.of(notification));
+
+        // When/Then
+        assertThatThrownBy(() -> notificationService.markAsRead(51L))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    assertThat(((BusinessException) ex).getStatus()).isEqualTo(HttpStatus.FORBIDDEN);
+                    assertThat(((BusinessException) ex).getCode()).isEqualTo("NOT_NOTIFICATION_OWNER");
+                });
+        assertThat(notification.getReadAt()).isNull();
+    }
+
+    @Test
+    void shouldMarkAsRead_WithUnknownId_ThrowNotFound() {
+        // Given
+        authenticateAna();
+        when(notificationRepository.findById(99L)).thenReturn(Optional.empty());
+
+        // When/Then
+        assertThatThrownBy(() -> notificationService.markAsRead(99L))
+                .isInstanceOf(ResourceNotFoundException.class);
+    }
+
+    private void authenticateAna() {
+        SecurityContextHolder.getContext().setAuthentication(new UsernamePasswordAuthenticationToken(
+                "ana@test.com", null, List.of(new SimpleGrantedAuthority("ROLE_PASSENGER"))));
+        when(userRepository.findByEmail("ana@test.com")).thenReturn(Optional.of(ana));
+    }
+
+    @Test
     void shouldGetMyNotifications_WithoutAuthentication_ThrowUnauthorized() {
         // When/Then
-        assertThatThrownBy(() -> notificationService.getMyNotifications())
+        assertThatThrownBy(() -> notificationService.getMyNotifications(false))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(ex -> assertThat(((BusinessException) ex).getStatus()).isEqualTo(HttpStatus.UNAUTHORIZED));
         verifyNoInteractions(userRepository, notificationRepository);
@@ -395,7 +560,7 @@ class NotificationServiceImplTest {
         when(userRepository.findByEmail("nadie@test.com")).thenReturn(Optional.empty());
 
         // When/Then
-        assertThatThrownBy(() -> notificationService.getMyNotifications())
+        assertThatThrownBy(() -> notificationService.getMyNotifications(false))
                 .isInstanceOf(ResourceNotFoundException.class);
     }
 

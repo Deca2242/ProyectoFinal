@@ -181,7 +181,11 @@ class AccessAndDispatchRulesIntegrationTest extends BaseIntegrationTest {
         // Conductor inactivo
         assign(dispatcher, trip.getId(), inactive.getId()).andExpect(status().isBadRequest());
 
-        // El dispatcherId del body se ignora: queda el despachador autenticado
+        // Un dispatcherId en el body distinto del despachador autenticado se rechaza (400)
+        assign(dispatcher, trip.getId(), userId("driver@test.com"), userId("driver@test.com"))
+                .andExpect(status().isBadRequest());
+
+        // Sin dispatcherId queda el despachador autenticado
         assign(dispatcher, trip.getId(), userId("driver@test.com"))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.dispatcherId").value(userId("disp@test.com")));
@@ -305,11 +309,15 @@ class AccessAndDispatchRulesIntegrationTest extends BaseIntegrationTest {
     }
 
     private ResultActions assign(String token, Long tripId, Long driverId) throws Exception {
-        // dispatcherId del body apunta a un usuario cualquiera: debe ignorarse
+        // Sin dispatcherId en el body: el despachador es el usuario autenticado
+        return assign(token, tripId, driverId, null);
+    }
+
+    private ResultActions assign(String token, Long tripId, Long driverId, Long dispatcherId) throws Exception {
         return mvc.perform(post("/api/v1/trips/{tripId}/assign", tripId)
                 .header("Authorization", bearer(token))
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(om.writeValueAsString(new AssignmentCreateRequest(tripId, driverId, driverId))));
+                .content(om.writeValueAsString(new AssignmentCreateRequest(tripId, driverId, dispatcherId))));
     }
 
     private ResultActions checklist(String token) throws Exception {

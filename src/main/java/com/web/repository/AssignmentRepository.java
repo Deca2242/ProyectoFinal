@@ -29,26 +29,6 @@ public interface AssignmentRepository extends JpaRepository<Assignment, Long> {
         @Param("date") LocalDate date
     );
 
-    // Verificar si el conductor está disponible
-    @Query("""
-        SELECT CASE WHEN COUNT(a) = 0 THEN true ELSE false END
-        FROM Assignment a
-        WHERE a.driver.id = :driverId
-        AND a.trip.tripDate = :date
-        AND a.trip.status NOT IN ('ARRIVED', 'CANCELLED')
-        AND (
-            (a.trip.departureTime <= :departureTime AND a.trip.arrivalEta >= :departureTime)
-            OR (a.trip.departureTime <= :arrivalEta AND a.trip.arrivalEta >= :arrivalEta)
-            OR (a.trip.departureTime >= :departureTime AND a.trip.arrivalEta <= :arrivalEta)
-        )
-    """)
-    boolean isDriverAvailable(
-        @Param("driverId") Long driverId,
-        @Param("date") LocalDate date,
-        @Param("departureTime") java.time.LocalDateTime departureTime,
-        @Param("arrivalEta") java.time.LocalDateTime arrivalEta
-    );
-
     // Buscar asignaciones sin checklist completado
     @Query("""
         SELECT a FROM Assignment a
@@ -95,7 +75,9 @@ public interface AssignmentRepository extends JpaRepository<Assignment, Long> {
     """)
     Optional<Assignment> findByIdWithDetails(@Param("assignmentId") Long assignmentId);
 
-    // Igual que isDriverAvailable pero sin contar la asignación del propio viaje (reprogramación)
+    // Disponibilidad del conductor (asignación, cambio de conductor y reprogramación): libre si ninguna de sus
+    // asignaciones activas, en cualquier fecha, se cruza con [departureTime, arrivalEta). No cuenta el propio viaje.
+    // Un viaje sin llegada estimada ocupa solo su hora de salida
     @Query("""
         SELECT CASE WHEN COUNT(a) = 0 THEN true ELSE false END
         FROM Assignment a
@@ -103,7 +85,7 @@ public interface AssignmentRepository extends JpaRepository<Assignment, Long> {
         AND a.trip.id <> :tripId
         AND a.trip.status NOT IN ('ARRIVED', 'CANCELLED')
         AND a.trip.departureTime < :arrivalEta
-        AND a.trip.arrivalEta > :departureTime
+        AND COALESCE(a.trip.arrivalEta, a.trip.departureTime) > :departureTime
     """)
     boolean isDriverAvailableExcludingTrip(
         @Param("driverId") Long driverId,

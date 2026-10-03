@@ -122,6 +122,7 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.POST, "/api/v1/sync/tickets").hasAnyRole("CLERK", "DRIVER")
                         .requestMatchers(HttpMethod.POST, "/api/v1/sync/boardings").hasAnyRole("DRIVER", "DISPATCHER")
                         .requestMatchers(HttpMethod.GET, "/api/v1/sync/conflicts").hasAnyRole("CLERK", "DRIVER", "DISPATCHER", "ADMIN")
+                        .requestMatchers(HttpMethod.PATCH, "/api/v1/sync/conflicts/*/resolve").hasAnyRole("CLERK", "DISPATCHER", "ADMIN")
 
                         // Tickets - requiere autenticación
                         .requestMatchers(HttpMethod.POST, "/api/v1/tickets/qr/*/board").hasAnyRole("DRIVER", "DISPATCHER")
@@ -131,6 +132,9 @@ public class SecurityConfig {
                         .requestMatchers("/api/v1/trips/*/seats/*/hold").authenticated()
                         .requestMatchers("/api/v1/trips/*/tickets").authenticated()
                         .requestMatchers("/api/v1/tickets/**").authenticated()
+
+                        // Notificaciones propias (consultar y marcar como leídas)
+                        .requestMatchers("/api/v1/notifications/me", "/api/v1/notifications/*/read").authenticated()
 
                         // Perfil del usuario autenticado (la gestión de usuarios va bajo /api/v1/admin/**)
                         .requestMatchers("/api/v1/users/me", "/api/v1/users/me/**").authenticated()

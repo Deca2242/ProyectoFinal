@@ -241,23 +241,71 @@ class AssignmentRepositoryTest extends BaseRepositoryTest {
                 entityManager.persist(assignment);
                 entityManager.flush();
 
-                // When - verificar disponibilidad en horario que solapa
-                boolean availableDuringTrip = assignmentRepository.isDriverAvailable(
+                // When - verificar disponibilidad en horario que solapa (trip2 es el viaje que se está asignando)
+                boolean availableDuringTrip = assignmentRepository.isDriverAvailableExcludingTrip(
                                 driver1.getId(),
-                                LocalDate.now(),
+                                trip2.getId(),
                                 LocalDateTime.now().plusHours(5), // Durante el viaje
                                 LocalDateTime.now().plusHours(7));
 
                 // Verificar disponibilidad en horario que no solapa
-                boolean availableAfterTrip = assignmentRepository.isDriverAvailable(
+                boolean availableAfterTrip = assignmentRepository.isDriverAvailableExcludingTrip(
                                 driver1.getId(),
-                                LocalDate.now(),
+                                trip2.getId(),
                                 LocalDateTime.now().plusHours(15), // Después del viaje
                                 LocalDateTime.now().plusHours(20));
 
                 // Then
                 assertThat(availableDuringTrip).isFalse();
                 assertThat(availableAfterTrip).isTrue();
+        }
+
+        // La disponibilidad es por intervalo: un viaje nocturno del día anterior ocupa al conductor el día siguiente
+        @Test
+        @DisplayName("Debe detectar el solape con un viaje nocturno de la fecha anterior")
+        void shouldDetectOverlapWithOvernightTripOfPreviousDate() {
+                // Given - viaje del día D que sale a las 22:00 y llega a las 03:00 de D+1
+                LocalDate day = LocalDate.now().plusDays(5);
+                Trip overnight = Trip.builder()
+                                .route(route)
+                                .bus(bus)
+                                .tripDate(day)
+                                .departureTime(day.atTime(22, 0))
+                                .arrivalEta(day.plusDays(1).atTime(3, 0))
+                                .status(Trip.TripStatus.SCHEDULED)
+                                .build();
+                entityManager.persist(overnight);
+                entityManager.persist(Assignment.builder().trip(overnight).driver(driver1).dispatcher(dispatcher).build());
+                entityManager.flush();
+
+                // When - otro viaje con fecha D+1 que sale a la 01:00
+                boolean available = assignmentRepository.isDriverAvailableExcludingTrip(
+                                driver1.getId(), trip1.getId(), day.plusDays(1).atTime(1, 0), day.plusDays(1).atTime(6, 0));
+                // Un viaje que sale justo cuando el nocturno llega no se cruza
+                boolean availableAtArrival = assignmentRepository.isDriverAvailableExcludingTrip(
+                                driver1.getId(), trip1.getId(), day.plusDays(1).atTime(3, 0), day.plusDays(1).atTime(6, 0));
+                // El propio viaje no cuenta (reprogramación o cambio de conductor)
+                boolean availableForSameTrip = assignmentRepository.isDriverAvailableExcludingTrip(
+                                driver1.getId(), overnight.getId(), day.plusDays(1).atTime(1, 0), day.plusDays(1).atTime(6, 0));
+
+                // Then
+                assertThat(available).isFalse();
+                assertThat(availableAtArrival).isTrue();
+                assertThat(availableForSameTrip).isTrue();
+        }
+
+        // Los viajes cancelados o ya llegados no ocupan al conductor
+        @Test
+        @DisplayName("No debe contar viajes cancelados o llegados")
+        void shouldIgnoreCancelledOrArrivedTripsForAvailability() {
+                // Given
+                trip1.setStatus(Trip.TripStatus.CANCELLED);
+                entityManager.persist(Assignment.builder().trip(trip1).driver(driver1).dispatcher(dispatcher).build());
+                entityManager.flush();
+
+                // When/Then
+                assertThat(assignmentRepository.isDriverAvailableExcludingTrip(driver1.getId(), trip2.getId(),
+                                LocalDateTime.now().plusHours(5), LocalDateTime.now().plusHours(7))).isTrue();
         }
 
         //Buscar asignaciones que tienen checklist sin completar

@@ -50,7 +50,7 @@ class AssignmentControllerTest {
 
     private AssignmentResponse assignment() {
         return new AssignmentResponse(1L, 10L, 3L, "Conductor", "300", 4L, "Despachador",
-                true, true, true, LocalDateTime.now(), null, null, null, null, null);
+                true, true, true, LocalDateTime.now(), null, null, null, null, null, null, null, true, true);
     }
 
     private void givenCurrentUser(long id, User.Role role) {

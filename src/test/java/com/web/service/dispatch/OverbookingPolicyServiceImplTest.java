@@ -224,4 +224,66 @@ class OverbookingPolicyServiceImplTest {
                 .hasMessageContaining("99");
         verify(policyRepository, never()).delete(any());
     }
+
+    // ---------- Edición ----------
+
+    @Test
+    void shouldUpdatePolicy_WithRangeOverlappingOnlyItself_Update() {
+        // Given: la política 1 (6-10) se amplía a 6-12; la 2 (12-14) es contigua
+        OverbookingPolicy current = policy(1L, 6, 10);
+        OverbookingPolicyCreateRequest request = request(6, 12);
+        when(policyRepository.findById(1L)).thenReturn(Optional.of(current));
+        when(policyRepository.findByRouteIdOrderByStartHourAsc(1L)).thenReturn(List.of(current, policy(2L, 12, 14)));
+        when(policyRepository.save(current)).thenReturn(current);
+        when(policyMapper.toResponse(current)).thenReturn(response);
+
+        // When
+        OverbookingPolicyResponse result = policyService.updatePolicy(1L, request);
+
+        // Then
+        assertThat(result).isSameAs(response);
+        verify(policyMapper).updateEntityFromRequest(request, current);
+        verify(policyRepository).save(current);
+    }
+
+    @Test
+    void shouldUpdatePolicy_WithRangeOverlappingAnotherPolicy_ThrowConflict() {
+        // Given
+        OverbookingPolicy current = policy(1L, 6, 10);
+        when(policyRepository.findById(1L)).thenReturn(Optional.of(current));
+        when(policyRepository.findByRouteIdOrderByStartHourAsc(1L)).thenReturn(List.of(current, policy(2L, 12, 14)));
+
+        // When/Then
+        assertThatThrownBy(() -> policyService.updatePolicy(1L, request(6, 13)))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    assertThat(((BusinessException) ex).getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                    assertThat(((BusinessException) ex).getCode()).isEqualTo("OVERBOOKING_POLICY_OVERLAP");
+                });
+        verify(policyRepository, never()).save(any());
+        verifyNoInteractions(policyMapper);
+    }
+
+    @ParameterizedTest
+    @CsvSource({"10, 10", "12, 6"})
+    void shouldUpdatePolicy_WithStartNotBeforeEnd_ThrowBadRequest(int start, int end) {
+        // Given
+        when(policyRepository.findById(1L)).thenReturn(Optional.of(policy(1L, 6, 10)));
+
+        // When/Then
+        assertThatThrownBy(() -> policyService.updatePolicy(1L, request(start, end)))
+                .isInstanceOf(BusinessException.class)
+                .extracting("code").isEqualTo("INVALID_HOUR_RANGE");
+        verify(policyRepository, never()).save(any());
+    }
+
+    @Test
+    void shouldUpdatePolicy_WithNonExistentPolicy_ThrowResourceNotFound() {
+        // Given
+        when(policyRepository.findById(99L)).thenReturn(Optional.empty());
+
+        // When/Then
+        assertThatThrownBy(() -> policyService.updatePolicy(99L, request(6, 10)))
+                .isInstanceOf(ResourceNotFoundException.class);
+    }
 }

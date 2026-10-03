@@ -7,7 +7,8 @@ import com.web.entity.Trip;
 
 import java.util.List;
 
-// Notificaciones simuladas por WhatsApp/SMS. Ningún envío hace fallar la operación de negocio que lo origina
+// Notificaciones simuladas por WhatsApp/SMS. Ningún envío hace fallar la operación de negocio que lo origina:
+// se entregan al confirmar esa operación, cada una en su propia transacción (NotificationDelivery)
 public interface NotificationService {
 
     void notifyTicketPurchased(Ticket ticket);
@@ -22,7 +23,11 @@ public interface NotificationService {
 
     void notifyTripRescheduled(Trip trip);
 
-    List<NotificationResponse> getMyNotifications();
+    // Del usuario autenticado, más recientes primero; con unreadOnly solo las no leídas
+    List<NotificationResponse> getMyNotifications(boolean unreadOnly);
+
+    // Marca como leída una notificación del usuario autenticado (403 si es de otro usuario)
+    NotificationResponse markAsRead(Long notificationId);
 
     // Todas las notificaciones, o solo las de un viaje si se indica tripId
     List<NotificationResponse> getNotifications(Long tripId);

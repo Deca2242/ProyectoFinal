@@ -19,6 +19,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -37,8 +39,8 @@ public class NotificationServiceImpl implements NotificationService {
     private final NotificationRepository notificationRepository;
     private final TicketRepository ticketRepository;
     private final UserRepository userRepository;
-    private final NotificationSender notificationSender;
     private final NotificationMapper notificationMapper;
+    private final NotificationDelivery notificationDelivery;
 
     @Override
     @Transactional
@@ -93,14 +95,30 @@ public class NotificationServiceImpl implements NotificationService {
 
     @Override
     @Transactional(readOnly = true)
-    public List<NotificationResponse> getMyNotifications() {
-        String email = SecurityUtils.currentUsername()
-                .orElseThrow(() -> new BusinessException("Se requiere un usuario autenticado",
-                        HttpStatus.UNAUTHORIZED, "UNAUTHENTICATED"));
-        User user = userRepository.findByEmail(email)
-                .orElseThrow(() -> new ResourceNotFoundException("Usuario", email));
-        return notificationMapper.toResponseList(
-                notificationRepository.findByUserIdOrderByCreatedAtDescIdDesc(user.getId()));
+    public List<NotificationResponse> getMyNotifications(boolean unreadOnly) {
+        User user = currentUser();
+        List<Notification> notifications = unreadOnly
+                ? notificationRepository.findByUserIdAndReadAtIsNullOrderByCreatedAtDescIdDesc(user.getId())
+                : notificationRepository.findByUserIdOrderByCreatedAtDescIdDesc(user.getId());
+        return notificationMapper.toResponseList(notifications);
+    }
+
+    // Solo el destinatario puede marcarla; marcar una ya leída conserva la primera hora de lectura
+    @Override
+    @Transactional
+    public NotificationResponse markAsRead(Long notificationId) {
+        User user = currentUser();
+        Notification notification = notificationRepository.findById(notificationId)
+                .orElseThrow(() -> new ResourceNotFoundException("Notificación", notificationId));
+        if (notification.getUser() == null || !user.getId().equals(notification.getUser().getId())) {
+            throw new BusinessException("La notificación no pertenece al usuario autenticado",
+                    HttpStatus.FORBIDDEN, "NOT_NOTIFICATION_OWNER");
+        }
+        if (notification.getReadAt() == null) {
+            notification.setReadAt(LocalDateTime.now());
+            notification = notificationRepository.save(notification);
+        }
+        return notificationMapper.toResponse(notification);
     }
 
     @Override
@@ -138,32 +156,58 @@ public class NotificationServiceImpl implements NotificationService {
         }
     }
 
-    // Envía por el canal simulado y deja registro; un fallo del envío queda como FAILED sin propagarse
+    // Prepara el aviso y lo entrega por el canal simulado dejando registro (ver deliverAfterCommit)
     private void send(User user, Notification.NotificationType type, String message, Trip trip, Ticket ticket) {
         if (user == null || user.getPhone() == null || user.getPhone().isBlank()) {
             log.debug("Usuario sin teléfono: no se envía la notificación {}", type);
             return;
         }
         String recipient = user.getPhone().trim();
-        Notification.Channel channel = resolveChannel(recipient);
-        Notification.NotificationStatus status = Notification.NotificationStatus.SENT;
-        try {
-            notificationSender.send(channel, recipient, message);
-        } catch (RuntimeException e) {
-            log.warn("Falló el envío {} a {}: {}", channel, recipient, e.getMessage());
-            status = Notification.NotificationStatus.FAILED;
-        }
-        notificationRepository.save(Notification.builder()
+        deliverAfterCommit(Notification.builder()
                 .user(user)
-                .channel(channel)
+                .channel(resolveChannel(recipient))
                 .type(type)
                 .recipient(recipient)
                 .message(message)
                 .trip(trip)
                 .ticket(ticket)
-                .status(status)
+                .status(Notification.NotificationStatus.SENT)
                 .createdAt(LocalDateTime.now())
                 .build());
+    }
+
+    // Con una transacción de negocio en curso (compra, andén, cancelación...) el aviso se entrega cuando esta
+    // confirma: no se avisa de algo que se deshizo, y el ticket o el viaje ya son visibles para la transacción
+    // propia (REQUIRES_NEW) de NotificationDelivery. Un fallo al enviar o guardar solo se registra en el log:
+    // nunca deja la operación de negocio marcada como rollback-only
+    private void deliverAfterCommit(Notification notification) {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    deliverQuietly(notification);
+                }
+            });
+        } else {
+            deliverQuietly(notification);
+        }
+    }
+
+    private void deliverQuietly(Notification notification) {
+        try {
+            notificationDelivery.deliver(notification);
+        } catch (RuntimeException e) {
+            log.warn("No se pudo registrar la notificación {} para {}: {}",
+                    notification.getType(), notification.getRecipient(), e.getMessage());
+        }
+    }
+
+    private User currentUser() {
+        String email = SecurityUtils.currentUsername()
+                .orElseThrow(() -> new BusinessException("Se requiere un usuario autenticado",
+                        HttpStatus.UNAUTHORIZED, "UNAUTHENTICATED"));
+        return userRepository.findByEmail(email)
+                .orElseThrow(() -> new ResourceNotFoundException("Usuario", email));
     }
 
     private static String routeLabel(Trip trip) {

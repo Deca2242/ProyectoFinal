@@ -3,6 +3,7 @@ package com.web.service.dispatch;
 import com.web.dto.notification.PlatformUpdateResponse;
 import com.web.entity.Trip;
 import com.web.exception.BusinessException;
+import com.web.exception.InvalidStateTransitionException;
 import com.web.exception.ResourceNotFoundException;
 import com.web.repository.TripRepository;
 import com.web.service.notification.NotificationService;
@@ -104,19 +105,19 @@ class PlatformServiceImplTest {
 
     @ParameterizedTest
     @EnumSource(value = Trip.TripStatus.class, names = {"DEPARTED", "ARRIVED", "CANCELLED"})
-    void shouldUpdatePlatform_WithTripAlreadyGone_ThrowBadRequest(Trip.TripStatus status) {
+    void shouldUpdatePlatform_WithTripAlreadyGone_ThrowInvalidStateTransition(Trip.TripStatus status) {
         // Given
         trip.setStatus(status);
         when(tripRepository.findById(1L)).thenReturn(Optional.of(trip));
 
-        // When/Then
+        // When/Then: 422, estado inválido para la operación
         assertThatThrownBy(() -> platformService.updatePlatform(1L, "A1"))
-                .isInstanceOf(BusinessException.class)
+                .isInstanceOf(InvalidStateTransitionException.class)
                 .hasMessageContaining(status.name())
                 .satisfies(ex -> {
                     BusinessException be = (BusinessException) ex;
-                    assertThat(be.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
-                    assertThat(be.getCode()).isEqualTo("INVALID_TRIP_STATUS");
+                    assertThat(be.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+                    assertThat(be.getCode()).isEqualTo("INVALID_STATE_TRANSITION");
                 });
         verify(tripRepository, never()).save(any());
         verifyNoInteractions(notificationService);

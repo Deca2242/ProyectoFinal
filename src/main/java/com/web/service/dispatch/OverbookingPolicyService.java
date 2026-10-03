@@ -11,5 +11,8 @@ public interface OverbookingPolicyService {
 
     OverbookingPolicyResponse createPolicy(Long routeId, OverbookingPolicyCreateRequest request);
 
+    // Edita franja y porcentaje validando el solape con las demás políticas de la ruta
+    OverbookingPolicyResponse updatePolicy(Long id, OverbookingPolicyCreateRequest request);
+
     void deletePolicy(Long id);
 }

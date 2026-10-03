@@ -43,23 +43,25 @@ public class OverbookingPolicyServiceImpl implements OverbookingPolicyService {
         Route route = routeRepository.findById(routeId)
                 .orElseThrow(() -> new ResourceNotFoundException("Ruta", routeId));
 
-        if (request.startHour() >= request.endHour()) {
-            throw new BusinessException("La hora de inicio debe ser menor que la hora de fin",
-                    HttpStatus.BAD_REQUEST, "INVALID_HOUR_RANGE");
-        }
-
-        // Las franjas de una ruta no se pueden solapar: la hora de salida debe tener una sola política
-        boolean overlaps = policyRepository.findByRouteIdOrderByStartHourAsc(routeId).stream()
-                .anyMatch(p -> p.getStartHour() < request.endHour() && p.getEndHour() > request.startHour());
-        if (overlaps) {
-            throw new BusinessException("La franja " + request.startHour() + "-" + request.endHour()
-                    + " se solapa con otra política de la ruta", HttpStatus.CONFLICT, "OVERBOOKING_POLICY_OVERLAP");
-        }
+        validateRange(routeId, null, request);
 
         OverbookingPolicy policy = policyMapper.toEntity(request);
         policy.setRoute(route);
         policy.setCreatedBy(SecurityUtils.currentUsername().flatMap(userRepository::findByEmail).orElse(null));
 
+        return policyMapper.toResponse(policyRepository.save(policy));
+    }
+
+    // Reemplaza la franja y el porcentaje de una política (la ruta no cambia)
+    @Override
+    @Transactional
+    public OverbookingPolicyResponse updatePolicy(Long id, OverbookingPolicyCreateRequest request) {
+        OverbookingPolicy policy = policyRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("Política de overbooking", id));
+
+        validateRange(policy.getRoute().getId(), id, request);
+
+        policyMapper.updateEntityFromRequest(request, policy);
         return policyMapper.toResponse(policyRepository.save(policy));
     }
 
@@ -69,5 +71,22 @@ public class OverbookingPolicyServiceImpl implements OverbookingPolicyService {
         OverbookingPolicy policy = policyRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Política de overbooking", id));
         policyRepository.delete(policy);
+    }
+
+    // La franja debe ser válida (400) y no solaparse con otra política de la ruta (409); al editar, excluye la propia
+    private void validateRange(Long routeId, Long excludedPolicyId, OverbookingPolicyCreateRequest request) {
+        if (request.startHour() >= request.endHour()) {
+            throw new BusinessException("La hora de inicio debe ser menor que la hora de fin",
+                    HttpStatus.BAD_REQUEST, "INVALID_HOUR_RANGE");
+        }
+
+        // Las franjas de una ruta no se pueden solapar: la hora de salida debe tener una sola política
+        boolean overlaps = policyRepository.findByRouteIdOrderByStartHourAsc(routeId).stream()
+                .filter(p -> !p.getId().equals(excludedPolicyId))
+                .anyMatch(p -> p.getStartHour() < request.endHour() && p.getEndHour() > request.startHour());
+        if (overlaps) {
+            throw new BusinessException("La franja " + request.startHour() + "-" + request.endHour()
+                    + " se solapa con otra política de la ruta", HttpStatus.CONFLICT, "OVERBOOKING_POLICY_OVERLAP");
+        }
     }
 }

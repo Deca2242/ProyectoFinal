@@ -10,6 +10,9 @@ public interface NotificationRepository extends JpaRepository<Notification, Long
     // Notificaciones de un usuario, más recientes primero
     List<Notification> findByUserIdOrderByCreatedAtDescIdDesc(Long userId);
 
+    // Notificaciones no leídas de un usuario, más recientes primero
+    List<Notification> findByUserIdAndReadAtIsNullOrderByCreatedAtDescIdDesc(Long userId);
+
     // Notificaciones de un viaje, más recientes primero
     List<Notification> findByTripIdOrderByCreatedAtDescIdDesc(Long tripId);
 
