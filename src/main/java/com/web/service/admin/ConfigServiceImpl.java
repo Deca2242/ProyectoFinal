@@ -35,7 +35,8 @@ public class ConfigServiceImpl implements ConfigService {
     public ConfigResponse getConfig() {
 
         Integer holdDuration = getIntegerConfig("hold.duration.minutes", 10);
-        Integer overbookingPercentage = getIntegerConfig("overbooking.percentage", 5);
+        // El porcentaje entero y la fracción máxima son la misma política de sobreventa
+        Integer overbookingPercentage = (int) Math.round(getOverbookingMaxPercentage() * 100);
         Integer noShowFeePercentage = getIntegerConfig("no.show.fee.percentage", 10);
         BigDecimal baggageWeightLimit = getDecimalConfig("baggage.weight.limit", BigDecimal.valueOf(20.0));
         BigDecimal baggagePricePerKg = getDecimalConfig("baggage.price.per.kg", BigDecimal.valueOf(2500));
@@ -94,6 +95,9 @@ public class ConfigServiceImpl implements ConfigService {
 
         if (request.overbookingPercentage() != null) {
             updateConfigValue("overbooking.percentage", String.valueOf(request.overbookingPercentage()), admin);
+            // La compra y la aprobación de overbooking leen la fracción: se mantienen sincronizadas
+            updateConfigValue("overbooking.max.percentage",
+                    BigDecimal.valueOf(request.overbookingPercentage()).movePointLeft(2).toPlainString(), admin);
         }
 
         if (request.noShowFeePercentage() != null) {
@@ -129,6 +133,8 @@ public class ConfigServiceImpl implements ConfigService {
 
         if (request.overbookingMaxPercentage() != null) {
             updateConfigValue("overbooking.max.percentage", String.valueOf(request.overbookingMaxPercentage()), admin);
+            updateConfigValue("overbooking.percentage",
+                    String.valueOf(Math.round(request.overbookingMaxPercentage() * 100)), admin);
         }
 
         // Políticas de Reembolso
@@ -265,6 +271,61 @@ public class ConfigServiceImpl implements ConfigService {
     @Transactional(readOnly = true)
     public BigDecimal getTicketPriceMultiplierMediumDemand() {
         return getDecimalConfig("ticket.price.multiplier.medium.demand", BigDecimal.valueOf(1.1));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Double getBaggageWeightMax() {
+        return getDoubleConfig("baggage.weight.max", 50.0);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Integer getParcelOtpMaxAttempts() {
+        return getIntegerConfig("parcel.otp.max.attempts", 3);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Integer getMaxActiveHoldsPerUserAndTrip() {
+        return getIntegerConfig("hold.max.per.user.trip", 4);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Integer getNoShowWindowMinutes() {
+        return getIntegerConfig("no.show.window.minutes", 5);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Double getOverbookingMinOccupancy() {
+        return getDoubleConfig("overbooking.min.occupancy", 0.95);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Integer getOverbookingWindowMinutes() {
+        return getIntegerConfig("overbooking.window.minutes", 30);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public boolean isDynamicPricingDefault() {
+        return configRepository.findByConfigKey("ticket.dynamic.pricing.default")
+                .map(config -> Boolean.parseBoolean(config.getConfigValue()))
+                .orElse(false);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public BigDecimal computeNoShowFee(BigDecimal ticketPrice) {
+        Integer percentage = getIntegerConfig("no.show.fee.percentage", 0);
+        if (percentage != null && percentage > 0 && ticketPrice != null) {
+            return ticketPrice.multiply(BigDecimal.valueOf(percentage))
+                    .divide(BigDecimal.valueOf(100), 2, java.math.RoundingMode.HALF_UP);
+        }
+        return getNoShowFee();
     }
 
     private Integer getIntegerConfig(String key, Integer fallback) {

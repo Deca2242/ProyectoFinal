@@ -1,12 +1,14 @@
 package com.web.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.web.dto.common.ErrorResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
+import org.springframework.http.MediaType;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
@@ -22,7 +24,8 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 import org.springframework.security.access.AccessDeniedException;
 
 import java.io.IOException;
-import java.util.Map;
+import java.nio.charset.StandardCharsets;
+import java.time.LocalDateTime;
 
 @Configuration
 @EnableWebSecurity
@@ -32,7 +35,8 @@ public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
 
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    // El ObjectMapper de Spring serializa LocalDateTime igual que el resto de la API
+    private final ObjectMapper objectMapper;
 
     @Bean
     public PasswordEncoder passwordEncoder() {
@@ -57,6 +61,9 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/v1/trips", "/api/v1/trips/*", "/api/v1/trips/*/seats").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/parcels/*/track").permitAll()
                         .requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/swagger-ui.html").permitAll()
+                        // Observabilidad: el healthcheck es público, el resto de Actuator solo ADMIN
+                        .requestMatchers("/actuator/health", "/actuator/health/**", "/actuator/info").permitAll()
+                        .requestMatchers("/actuator/**").hasRole("ADMIN")
 
                         // Admin - Gestión de catálogos
                         .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
@@ -131,17 +138,22 @@ public class SecurityConfig {
         return http.build();
     }
 
+    // 401 y 403 de la cadena de seguridad usan el mismo ErrorResponse que GlobalExceptionHandler
     private void handleAuthenticationError(HttpServletRequest request, HttpServletResponse response, AuthenticationException authException) throws IOException {
-        response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-        response.setContentType("application/json");
-        response.getWriter().write(objectMapper.writeValueAsString(Map.of("error", "No autenticado", "message", "Se requiere un token válido para acceder a este recurso.")));
+        writeError(response, HttpServletResponse.SC_UNAUTHORIZED, "No autenticado",
+                "Se requiere un token válido para acceder a este recurso.");
     }
-
 
     private void handleAccessDeniedError(HttpServletRequest request, HttpServletResponse response, AccessDeniedException accessDeniedException) throws IOException {
-        response.setStatus(HttpServletResponse.SC_FORBIDDEN);
-        response.setContentType("application/json");
-        response.getWriter().write(objectMapper.writeValueAsString(Map.of("error", "Acceso denegado", "message", "No tienes los permisos suficientes para realizar esta acción.")));
+        writeError(response, HttpServletResponse.SC_FORBIDDEN, "Acceso denegado",
+                "No tienes los permisos suficientes para realizar esta acción.");
+    }
+
+    private void writeError(HttpServletResponse response, int status, String error, String message) throws IOException {
+        response.setStatus(status);
+        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+        response.setCharacterEncoding(StandardCharsets.UTF_8.name());
+        ErrorResponse body = new ErrorResponse(status, error, message, LocalDateTime.now(), null);
+        response.getWriter().write(objectMapper.writeValueAsString(body));
     }
 }
-

@@ -46,4 +46,22 @@ public interface ConfigService {
     Map<String, Integer> getDiscountPercentages();
 
     Integer getDiscountPercentage(String discountType, Integer fallback);
+
+    // Límites operativos (todos configurables por ADMIN; valores por defecto del documento del proyecto)
+    Double getBaggageWeightMax();
+
+    Integer getParcelOtpMaxAttempts();
+
+    Integer getMaxActiveHoldsPerUserAndTrip();
+
+    Integer getNoShowWindowMinutes();
+
+    Double getOverbookingMinOccupancy();
+
+    Integer getOverbookingWindowMinutes();
+
+    boolean isDynamicPricingDefault();
+
+    // Fee de no-show: porcentaje del precio del ticket si "no.show.fee.percentage" > 0, si no el monto fijo "no.show.fee"
+    BigDecimal computeNoShowFee(BigDecimal ticketPrice);
 }
