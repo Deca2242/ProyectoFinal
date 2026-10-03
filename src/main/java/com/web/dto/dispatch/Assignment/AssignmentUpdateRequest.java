@@ -4,6 +4,8 @@ import java.io.Serializable;
 
 public record AssignmentUpdateRequest(
     Long driverId,
-    Boolean checklistOk
+    Boolean checklistOk,
+    Boolean soatValid,
+    Boolean revisionValid
 ) implements Serializable {}
 

@@ -21,6 +21,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 
+
 @RestController
 @RequestMapping("/api/v1")
 @RequiredArgsConstructor
@@ -30,7 +31,7 @@ public class TicketController {
     private final SeatHoldService seatHoldService;
     private final UserRepository userRepository;
 
-    // CASO DE USO 2: Hold de 10 minutos
+    // HOLD del asiento
     @PostMapping("/trips/{tripId}/seats/{seatNumber}/hold")
     @PreAuthorize("isAuthenticated()")
     public ResponseEntity<SeatHoldResponse> holdSeat(
@@ -42,14 +43,13 @@ public class TicketController {
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
-    // CASO DE USO 1 y 2: Compra con validación de tramo
+    // Compra un ticket validando el tramo y disponibilidad
     @PostMapping("/trips/{tripId}/tickets")
     @PreAuthorize("isAuthenticated()")
     public ResponseEntity<TicketResponse> purchaseTicket(
             @PathVariable Long tripId,
             @RequestBody @Valid TicketCreateRequest request) {
 
-        // Validar que el tripId de la URL coincida con el del body (si viene)
         if (request.tripId() != null && !request.tripId().equals(tripId)) {
             throw new BusinessException(
                     "El tripId de la URL no coincide con el del body",
@@ -57,7 +57,6 @@ public class TicketController {
                     "TRIP_ID_MISMATCH");
         }
 
-        // Crear un nuevo request usando SIEMPRE el tripId de la URL
         TicketCreateRequest validatedRequest = new TicketCreateRequest(
                 tripId,
                 request.passengerId(),
@@ -70,13 +69,14 @@ public class TicketController {
                 request.toStopOrder(),
                 request.price(),
                 request.paymentMethod(),
-                request.baggage());
+                request.baggage(),
+                request.passengerType());
 
         TicketResponse response = ticketService.purchaseTicket(validatedRequest);
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
-    // Política de reembolso
+    // Cancela un ticket aplicando política de reembolso
     @PostMapping("/tickets/{id}/cancel")
     @PreAuthorize("isAuthenticated()")
     public ResponseEntity<TicketCancelResponse> cancelTicket(
@@ -87,7 +87,7 @@ public class TicketController {
         return ResponseEntity.ok(response);
     }
 
-    // Consulta de tickets por usuario
+    // Obtiene un ticket por su ID
     @GetMapping("/tickets/{id}")
     @PreAuthorize("isAuthenticated()")
     public ResponseEntity<TicketResponse> getTicketById(@PathVariable Long id) {
@@ -95,19 +95,33 @@ public class TicketController {
         return ResponseEntity.ok(response);
     }
 
+    // Obtiene todos los tickets del usuario autenticado
     @GetMapping("/tickets/my-tickets")
     @PreAuthorize("isAuthenticated()")
     public ResponseEntity<List<TicketResponse>> getMyTickets() {
-        // Obtener userId del contexto de seguridad
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
         String email = authentication.getName();
-
-        // Buscar el usuario por email para obtener su ID
         Long userId = userRepository.findByEmail(email)
                 .orElseThrow(() -> new RuntimeException("Usuario no encontrado: " + email))
                 .getId();
 
         List<TicketResponse> response = ticketService.getUserTickets(userId);
+        return ResponseEntity.ok(response);
+    }
+
+    // Obtiene un ticket por su código QR
+    @GetMapping("/tickets/qr/{qrCode}")
+    @PreAuthorize("hasAnyRole('DRIVER', 'DISPATCHER', 'CLERK')")
+    public ResponseEntity<TicketResponse> getTicketByQrCode(@PathVariable String qrCode) {
+        TicketResponse response = ticketService.getTicketByQrCode(qrCode);
+        return ResponseEntity.ok(response);
+    }
+
+    // Registra el abordaje del pasajero validando su código QR
+    @PostMapping("/tickets/qr/{qrCode}/board")
+    @PreAuthorize("hasAnyRole('DRIVER', 'DISPATCHER')")
+    public ResponseEntity<TicketResponse> boardTicket(@PathVariable String qrCode) {
+        TicketResponse response = ticketService.boardTicket(qrCode);
         return ResponseEntity.ok(response);
     }
 }

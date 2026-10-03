@@ -1,18 +1,25 @@
 package com.web.service.ticket;
 
 import com.web.dto.ticket.reservations.SeatHoldCreateRequest;
+import com.web.dto.ticket.reservations.SeatHoldRequest;
 import com.web.dto.ticket.reservations.SeatHoldResponse;
 import com.web.dto.ticket.reservations.mapper.SeatHoldMapper;
 import com.web.entity.SeatHold;
+import com.web.entity.Stop;
 import com.web.entity.Trip;
 import com.web.entity.User;
+import com.web.exception.InvalidSegmentException;
 import com.web.exception.ResourceNotFoundException;
 import com.web.exception.SeatNotAvailableException;
 import com.web.repository.SeatHoldRepository;
+import com.web.repository.StopRepository;
 import com.web.repository.TicketRepository;
 import com.web.repository.TripRepository;
 import com.web.repository.UserRepository;
 import com.web.service.admin.ConfigService;
+import com.web.exception.BusinessException;
+import com.web.util.SecurityUtils;
+import org.springframework.http.HttpStatus;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -28,97 +35,170 @@ import java.util.Optional;
 @RequiredArgsConstructor
 public class SeatHoldServiceImpl implements SeatHoldService {
 
+    static final int MAX_ACTIVE_HOLDS_PER_USER_AND_TRIP = 4;
+
     private final SeatHoldRepository seatHoldRepository;
     private final TicketRepository ticketRepository;
     private final TripRepository tripRepository;
+    private final StopRepository stopRepository;
     private final UserRepository userRepository;
     private final SeatHoldMapper seatHoldMapper;
     private final ConfigService configService;
 
+
+    // Crea un hold de asiento para el tramo indicado (usado por el controller)
     @Override
     @Transactional
-    public SeatHoldResponse createHold(Long tripId, Integer seatNumber, com.web.dto.ticket.reservations.SeatHoldRequest request) {
+    public SeatHoldResponse createHold(Long tripId, Integer seatNumber, SeatHoldRequest request) {
+        // Serializa holds y ventas del mismo viaje (evita dos holds simultáneos sobre la misma silla)
+        tripRepository.lockById(tripId);
+        Trip trip = tripRepository.findById(tripId)
+                .orElseThrow(() -> new ResourceNotFoundException("Viaje", tripId));
 
-        SeatHoldCreateRequest internalRequest = new SeatHoldCreateRequest(
-                tripId,
-                seatNumber,
-                request.userId()
-        );
-        return createHold(internalRequest, request.userId());
+        Stop fromStop = stopRepository.findById(request.fromStopId())
+                .orElseThrow(() -> new ResourceNotFoundException("Parada origen", request.fromStopId()));
+        Stop toStop = stopRepository.findById(request.toStopId())
+                .orElseThrow(() -> new ResourceNotFoundException("Parada destino", request.toStopId()));
+
+        Long routeId = trip.getRoute().getId();
+        if (!fromStop.getRoute().getId().equals(routeId) || !toStop.getRoute().getId().equals(routeId)) {
+            throw new InvalidSegmentException("Las paradas no pertenecen a la ruta del viaje");
+        }
+        if (fromStop.getOrder() >= toStop.getOrder()) {
+            throw new InvalidSegmentException("La parada de origen debe ser anterior a la de destino");
+        }
+
+        return createHold(trip, seatNumber, request.userId(), fromStop, toStop);
     }
 
+    // Crea un hold sobre todo el viaje (sin tramo)
     @Override
     @Transactional
     public SeatHoldResponse createHold(SeatHoldCreateRequest request, Long userId) {
-        LocalDateTime now = LocalDateTime.now();
-
+        tripRepository.lockById(request.tripId());
         Trip trip = tripRepository.findById(request.tripId())
                 .orElseThrow(() -> new ResourceNotFoundException("Viaje", request.tripId()));
 
+        return createHold(trip, request.seatNumber(), userId, null, null);
+    }
+
+    // Crea un hold temporal validando estado del viaje, número de asiento, holds y ventas que se solapan.
+    // fromStop/toStop null significa que el hold bloquea el asiento en todo el viaje.
+    private SeatHoldResponse createHold(Trip trip, Integer seatNumber, Long userId, Stop fromStop, Stop toStop) {
+        LocalDateTime now = LocalDateTime.now();
+        Long tripId = trip.getId();
+
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Usuario", userId));
+
+        // Un pasajero solo reserva a su nombre; la taquilla puede reservar para terceros
+        if (SecurityUtils.hasRole("PASSENGER")
+                && !SecurityUtils.currentUsername().orElse("").equalsIgnoreCase(user.getEmail())) {
+            throw new BusinessException("Un pasajero solo puede reservar a su propio nombre",
+                    HttpStatus.FORBIDDEN, "NOT_HOLD_OWNER");
+        }
+
+        if (trip.getStatus() != Trip.TripStatus.SCHEDULED) {
+            throw new SeatNotAvailableException(
+                    "El viaje no admite reservas (estado: " + trip.getStatus() + ")");
+        }
 
         if (trip.getDepartureTime().isBefore(now)) {
             throw new SeatNotAvailableException("El viaje ya ha salido");
         }
 
-        if (request.seatNumber() < 1 || request.seatNumber() > trip.getBus().getCapacity()) {
+        // Sillas físicas más las de overbooking aprobadas por el DISPATCHER
+        int approvedExtra = trip.getOverbookingApprovedSeats() == null ? 0 : trip.getOverbookingApprovedSeats();
+        if (seatNumber < 1 || seatNumber > trip.getBus().getCapacity() + approvedExtra) {
             throw new SeatNotAvailableException(
-                    "El asiento " + request.seatNumber() + " no existe en este bus (capacidad: " + 
-                    trip.getBus().getCapacity() + ")"
+                    "El asiento " + seatNumber + " no existe en este bus (capacidad: " +
+                            trip.getBus().getCapacity() + ")"
             );
         }
 
-        Optional<SeatHold> activeHold = seatHoldRepository.findActiveHold(
-                request.tripId(), 
-                request.seatNumber(), 
-                now
-        );
+        boolean fullTrip = fromStop == null || toStop == null;
+        int fromOrder = fullTrip ? Integer.MIN_VALUE : fromStop.getOrder();
+        int toOrder = fullTrip ? Integer.MAX_VALUE : toStop.getOrder();
 
-        if (activeHold.isPresent()) {
-            SeatHold existingHold = activeHold.get();
-            if (existingHold.getUser().getId().equals(userId)) {
-                return seatHoldMapper.toResponse(existingHold);
+        List<SeatHold> overlappingHolds = seatHoldRepository.findOverlappingActiveHolds(
+                tripId, seatNumber, fromOrder, toOrder, now);
+
+        for (SeatHold existingHold : overlappingHolds) {
+            if (!existingHold.getUser().getId().equals(userId)) {
+                throw new SeatNotAvailableException(
+                        "El asiento " + seatNumber + " ya tiene un hold activo hasta " +
+                                existingHold.getExpiresAt()
+                );
             }
-            throw new SeatNotAvailableException(
-                    "El asiento " + request.seatNumber() + " ya tiene un hold activo hasta " + 
-                    existingHold.getExpiresAt()
-            );
         }
 
-        Boolean isSeatAvailable = ticketRepository.isSeatAvailableForFullTrip(
-                request.tripId(), 
-                request.seatNumber()
-        );
+        // Si el usuario ya tenía un hold sobre el mismo tramo se devuelve ese mismo hold;
+        // si tenía uno sobre otro tramo que se solapa, se reemplaza por el nuevo
+        Optional<SeatHold> sameSegmentHold = overlappingHolds.stream()
+                .filter(h -> isSameSegment(h, fromStop, toStop))
+                .findFirst();
+        if (sameSegmentHold.isPresent()) {
+            return seatHoldMapper.toResponse(sameSegmentHold.get());
+        }
+
+        boolean isSeatAvailable = fullTrip
+                ? Boolean.TRUE.equals(ticketRepository.isSeatAvailableForFullTrip(tripId, seatNumber))
+                : ticketRepository.isSeatAvailableForSegment(tripId, seatNumber, fromOrder, toOrder);
 
         if (!isSeatAvailable) {
             throw new SeatNotAvailableException(
-                    "El asiento " + request.seatNumber() + " ya está vendido"
+                    "El asiento " + seatNumber + " ya está vendido para el tramo seleccionado"
             );
         }
 
-        Integer holdDurationMinutes = configService.getHoldDurationMinutes();
-        LocalDateTime expiresAt = now.plusMinutes(holdDurationMinutes);
-        
-        SeatHold seatHold = seatHoldMapper.toEntity(request);
-        // Establecer las relaciones manualmente
-        seatHold.setTrip(trip);
-        seatHold.setUser(user);
-        seatHold.setExpiresAt(expiresAt);
-        seatHold = seatHoldRepository.save(seatHold);
+        // Tope de holds activos por usuario y viaje: evita que alguien bloquee el bus entero
+        long otherActiveHolds = seatHoldRepository.findUserActiveHoldsForTrip(tripId, userId, now).stream()
+                .filter(h -> overlappingHolds.stream().noneMatch(o -> o.getId() != null && o.getId().equals(h.getId())))
+                .count();
+        if (otherActiveHolds >= MAX_ACTIVE_HOLDS_PER_USER_AND_TRIP) {
+            throw new BusinessException("Se alcanzó el máximo de " + MAX_ACTIVE_HOLDS_PER_USER_AND_TRIP
+                    + " reservas activas por viaje", HttpStatus.BAD_REQUEST, "HOLD_LIMIT_REACHED");
+        }
 
+        for (SeatHold replacedHold : overlappingHolds) {
+            replacedHold.setStatus(SeatHold.HoldStatus.EXPIRED);
+            seatHoldRepository.save(replacedHold);
+        }
+
+        Integer holdDurationMinutes = configService.getHoldDurationMinutes();
+
+        SeatHold seatHold = SeatHold.builder()
+                .trip(trip)
+                .seatNumber(seatNumber)
+                .user(user)
+                .fromStop(fromStop)
+                .toStop(toStop)
+                .expiresAt(now.plusMinutes(holdDurationMinutes))
+                .status(SeatHold.HoldStatus.HOLD)
+                .build();
+        seatHold = seatHoldRepository.save(seatHold);
 
         return seatHoldMapper.toResponse(seatHold);
     }
 
+    private boolean isSameSegment(SeatHold hold, Stop fromStop, Stop toStop) {
+        if (fromStop == null || toStop == null) {
+            return hold.getFromStop() == null || hold.getToStop() == null;
+        }
+        return hold.getFromStop() != null && hold.getToStop() != null
+                && hold.getFromStop().getId().equals(fromStop.getId())
+                && hold.getToStop().getId().equals(toStop.getId());
+    }
+
+    // Verifica si un asiento tiene un hold activo
     @Override
     @Transactional(readOnly = true)
     public boolean hasActiveHold(Long tripId, Integer seatNumber) {
         LocalDateTime now = LocalDateTime.now();
-        Optional<SeatHold> activeHold = seatHoldRepository.findActiveHold(tripId, seatNumber, now);
-        return activeHold.isPresent();
+        return !seatHoldRepository.findActiveHolds(tripId, seatNumber, now).isEmpty();
     }
 
+    // Libera un hold cambiando su estado a SOLD (usado cuando se compra el ticket)
     @Override
     @Transactional
     public void releaseHold(Long holdId) {
@@ -131,19 +211,21 @@ public class SeatHoldServiceImpl implements SeatHoldService {
 
     }
 
+    // Busca un hold activo específico de un usuario para un asiento en un viaje
     @Override
     @Transactional(readOnly = true)
     public Optional<SeatHoldResponse> findUserActiveHold(Long tripId, Integer seatNumber, Long userId) {
         LocalDateTime now = LocalDateTime.now();
         List<SeatHold> holds = seatHoldRepository.findUserActiveHoldsForTrip(tripId, userId, now);
-        
+
         Optional<SeatHold> hold = holds.stream()
                 .filter(h -> h.getSeatNumber().equals(seatNumber))
                 .findFirst();
-        
+
         return hold.map(seatHoldMapper::toResponse);
     }
 
+    // Obtiene todos los holds activos de un viaje específico
     @Override
     @Transactional(readOnly = true)
     public List<SeatHoldResponse> getActiveHoldsByTrip(Long tripId) {
@@ -152,6 +234,7 @@ public class SeatHoldServiceImpl implements SeatHoldService {
         return seatHoldMapper.toResponseList(holds);
     }
 
+    // Obtiene todos los holds activos de un usuario (filtrados por fecha de expiración)
     @Override
     @Transactional(readOnly = true)
     public List<SeatHoldResponse> getUserActiveHolds(Long userId) {
@@ -163,14 +246,14 @@ public class SeatHoldServiceImpl implements SeatHoldService {
         return seatHoldMapper.toResponseList(activeHolds);
     }
 
-    @Scheduled(fixedRate = 60000)
+    // Expira holds antiguos automáticamente cada 60 segundos (tarea programada)
+    @Scheduled(fixedRate = 60000) //60 segundos
     @Transactional
     public void expireOldHolds() {
         LocalDateTime now = LocalDateTime.now();
-        
-        int expiredCount = seatHoldRepository.expireHolds(now);
 
-        }
+        int expiredCount = seatHoldRepository.expireHolds(now);
     }
+}
 
 

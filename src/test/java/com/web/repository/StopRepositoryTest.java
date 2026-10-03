@@ -13,6 +13,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+
 @DisplayName("StopRepository Integration Tests")
 class StopRepositoryTest extends BaseRepositoryTest {
 

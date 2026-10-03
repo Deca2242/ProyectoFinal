@@ -2,11 +2,12 @@ package com.web.dto.admin;
 
 import java.io.Serializable;
 
+// Analisis operativo
 public record OperationalMetrics(
-    Double onTimeDepartureRate,
-    Double onTimeArrivalRate,
-    Double noShowRate,
-    Integer totalCancellations,
-    Integer totalIncidents
-) implements Serializable {}
-
+        Double onTimeDepartureRate, // Tasa de salida puntual
+        Double onTimeArrivalRate,
+        Double noShowRate,
+        Integer totalCancellations,
+        Integer totalIncidents,
+        Integer totalNoShows) implements Serializable {
+}

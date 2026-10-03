@@ -42,6 +42,27 @@ public class Trip {
     @Builder.Default
     private TripStatus status = TripStatus.SCHEDULED;
 
+    // Horas reales de salida y llegada (métrica de puntualidad)
+    @Column(name = "departed_at")
+    private LocalDateTime departedAt;
+
+    @Column(name = "arrived_at")
+    private LocalDateTime arrivedAt;
+
+    // Sillas por encima de la capacidad aprobadas por un DISPATCHER (overbooking controlado)
+    @Column(name = "overbooking_approved_seats", nullable = false)
+    @Builder.Default
+    private Integer overbookingApprovedSeats = 0;
+
+    // Andén de salida (se notifica a los pasajeros cuando cambia)
+    @Column(length = 20)
+    private String platform;
+
+    // Ya se envió el aviso de llegada próxima (evita repetirlo)
+    @Column(name = "arrival_notified", nullable = false)
+    @Builder.Default
+    private Boolean arrivalNotified = false;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     @Builder.Default
     private LocalDateTime createdAt = LocalDateTime.now();

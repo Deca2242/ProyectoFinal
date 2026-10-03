@@ -6,7 +6,7 @@ import java.io.Serializable;
 import java.math.BigDecimal;
 
 public record BaggageCreateRequest(
-    @NotNull BigDecimal weightKg,
+    @NotNull @jakarta.validation.constraints.Positive @jakarta.validation.constraints.DecimalMax("999.99") BigDecimal weightKg,
     BigDecimal excessFee  // Calculado por servicio
 ) implements Serializable {}
 

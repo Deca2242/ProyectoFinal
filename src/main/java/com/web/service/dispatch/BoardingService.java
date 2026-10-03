@@ -9,6 +9,8 @@ public interface BoardingService {
     TripResponse closeBoarding(Long tripId);
     
     TripResponse departTrip(Long tripId);
+
+    TripResponse arriveTrip(Long tripId);
     
     TripResponse getTripStatus(Long tripId);
 }

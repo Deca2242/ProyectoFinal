@@ -12,6 +12,14 @@ public record AssignmentResponse(
     Long dispatcherId,
     String dispatcherName,
     Boolean checklistOk,
-    LocalDateTime assignedAt
+    Boolean soatValid,
+    Boolean revisionValid,
+    LocalDateTime assignedAt,
+    // Datos del viaje para que el conductor vea su programación (GET /assignments/me)
+    String routeName,
+    java.time.LocalDate tripDate,
+    LocalDateTime departureTime,
+    LocalDateTime arrivalEta,
+    String busPlate
 ) implements Serializable {}
 

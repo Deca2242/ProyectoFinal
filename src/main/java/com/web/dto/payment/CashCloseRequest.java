@@ -10,7 +10,7 @@ import java.time.LocalDate;
 public record CashCloseRequest(
     @NotNull Long userId,  // CLERK o DRIVER
     @NotNull LocalDate date,
-    @NotNull BigDecimal expectedAmount,
+    BigDecimal expectedAmount,  // Opcional: el total esperado lo calcula el sistema a partir de los tickets en efectivo
     @NotNull BigDecimal actualAmount,
     String notes
 ) implements Serializable {}

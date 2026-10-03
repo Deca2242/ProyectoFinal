@@ -18,5 +18,8 @@ public interface AssignmentService {
     List<AssignmentResponse> getDriverAssignments(Long driverId, LocalDate date);
     
     List<AssignmentResponse> getDispatcherAssignments(Long dispatcherId);
+
+    // Con fecha: solo las asignaciones de los viajes de ese día; sin fecha: desde hoy
+    List<AssignmentResponse> getDispatcherAssignments(Long dispatcherId, LocalDate date);
 }
 

@@ -5,7 +5,7 @@ services:
     image: 'postgres:16-alpine'
     container_name: postgres_bus_db
     environment:
-      - 'POSTGRES_DB=ProyectoFinalBD'
+      - 'POSTGRES_DB=ProyectoFinalDB'
       - 'POSTGRES_USER=Cristian'
       - 'POSTGRES_PASSWORD=2242'
     ports:

@@ -25,6 +25,7 @@ public class PaymentController {
     private final PaymentService paymentService;
     private final UserRepository userRepository;
     
+    // Confirma el pago de un ticket y lo activa
     @PostMapping("/payments/confirm")
     @PreAuthorize("hasRole('CLERK')")
     public ResponseEntity<TicketResponse> confirmPayment(@Valid @RequestBody PaymentConfirmRequest request) {
@@ -32,14 +33,12 @@ public class PaymentController {
         return ResponseEntity.ok(response);
     }
     
+    // Cierra la caja del día calculando efectivo esperado vs reportado
     @PostMapping("/cash/close")
     @PreAuthorize("hasAnyRole('CLERK', 'DRIVER')")
     public ResponseEntity<CashCloseResponse> closeCash(@Valid @RequestBody CashCloseRequest request) {
-        // Obtener userId del contexto de seguridad
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
         String email = authentication.getName();
-
-        // Buscar el usuario por email para obtener su ID
         Long userId = userRepository.findByEmail(email)
                 .orElseThrow(() -> new RuntimeException("Usuario no encontrado: " + email))
                 .getId();

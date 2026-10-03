@@ -15,6 +15,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+
 @DisplayName("IncidentRepository Integration Tests")
 class IncidentRepositoryTest extends BaseRepositoryTest {
 

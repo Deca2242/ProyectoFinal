@@ -21,7 +21,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
+
 
 
 @Service
@@ -34,6 +37,7 @@ public class RouteServiceImpl implements RouteService {
     private final RouteMapper routeMapper;
     private final StopMapper stopMapper;
 
+    // Crea una nueva ruta validando que el código sea único
     @Override
     @Transactional
     public RouteResponse createRoute(RouteCreateRequest request) {
@@ -49,6 +53,7 @@ public class RouteServiceImpl implements RouteService {
         return routeMapper.toResponse(savedRoute);
     }
 
+    //Obtener todas las rutas
     @Override
     @Transactional(readOnly = true)
     public List<RouteResponse> getAllRoutes() {
@@ -56,6 +61,7 @@ public class RouteServiceImpl implements RouteService {
         return routeMapper.toResponseList(routes);
     }
 
+    //Obtener ruta por ID
     @Override
     @Transactional(readOnly = true)
     public RouteDetailResponse getRouteById(Long id) {
@@ -64,13 +70,14 @@ public class RouteServiceImpl implements RouteService {
         return routeMapper.toDetailResponse(route);
     }
 
+    //Actualizar ruta
     @Override
     @Transactional
     public RouteResponse updateRoute(Long id, RouteUpdateRequest request) {
         Route route = routeRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Ruta", id));
 
-        // RouteUpdateRequest no permite cambiar el código, así que no validamos
+
         routeMapper.updateEntityFromRequest(request, route);
 
         Route updatedRoute = routeRepository.save(route);
@@ -79,21 +86,25 @@ public class RouteServiceImpl implements RouteService {
         return routeMapper.toResponse(updatedRoute);
     }
 
+    //Eliminar ruta
     @Override
     @Transactional
     public void deleteRoute(Long id) {
         Route route = routeRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Ruta", id));
 
-        if (tripRepository.countByRouteIdAndTripDateAfter(id, LocalDate.now()) > 0) {
+        // Se incluyen los viajes de hoy (antes solo se contaban los posteriores a hoy)
+        if (tripRepository.countByRouteIdAndTripDateGreaterThanEqual(id, LocalDate.now()) > 0) {
             throw new BusinessException("No se puede eliminar la ruta porque tiene viajes programados", HttpStatus.BAD_REQUEST, "ROUTE_HAS_TRIPS");
         }
 
-        routeRepository.delete(route);
-
-
+        // Borrado lógico: los viajes y tickets históricos siguen referenciando la ruta,
+        // un DELETE físico violaría las llaves foráneas
+        route.setIsActive(false);
+        routeRepository.save(route);
     }
 
+    //Añadir parada
     @Override
     @Transactional
     public RouteDetailResponse addStop(Long routeId, StopCreateRequest request) {
@@ -109,10 +120,18 @@ public class RouteServiceImpl implements RouteService {
 
         Stop savedStop = stopRepository.save(stop);
 
+        // La ruta ya está en el contexto de persistencia con su lista de paradas cargada:
+        // volver a consultarla devolvería la misma instancia sin la parada nueva
+        if (route.getStops() == null) {
+            route.setStops(new ArrayList<>());
+        }
+        route.getStops().add(savedStop);
+        route.getStops().sort(Comparator.comparing(Stop::getOrder));
 
-        return getRouteById(routeId);
+        return routeMapper.toDetailResponse(route);
     }
 
+    //Remover parada
     @Override
     @Transactional
     public void removeStop(Long routeId, Long stopId) {
@@ -126,10 +145,17 @@ public class RouteServiceImpl implements RouteService {
             throw new BusinessException("La parada no pertenece a esta ruta", HttpStatus.BAD_REQUEST, "STOP_ROUTE_MISMATCH");
         }
 
+        // Borrarla dejaría huérfanos tickets, encomiendas o tarifas (y cambiaría el orden de los tramos vendidos)
+        if (stopRepository.isReferenced(stopId)) {
+            throw new BusinessException("La parada tiene tickets, encomiendas o tarifas asociadas y no se puede eliminar",
+                    HttpStatus.CONFLICT, "STOP_IN_USE");
+        }
+
         stopRepository.delete(stop);
 
     }
 
+    // buscar rutas que conecten dos ciudades específicas
     @Override
     @Transactional(readOnly = true)
     public List<RouteResponse> findRoutesConnecting(String origin, String destination) {

@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 
+// Controlador para gestión de rutas y paradas
 @RestController
 @RequestMapping("/api/v1/routes")
 @RequiredArgsConstructor
@@ -22,25 +23,26 @@ public class CatalogController {
 
     private final RouteService routeService;
 
-    // Endpoints públicos (consulta)
-
+    // Obtiene todas las rutas disponibles
     @GetMapping
     public ResponseEntity<List<RouteResponse>> getAllRoutes() {
         return ResponseEntity.ok(routeService.getAllRoutes());
     }
 
+    // Obtiene una ruta por su ID con todos sus detalles
     @GetMapping("/{id}")
     public ResponseEntity<RouteDetailResponse> getRouteById(@PathVariable Long id) {
         return ResponseEntity.ok(routeService.getRouteById(id));
     }
 
+    // Obtiene una ruta con todas sus paradas
     @GetMapping("/{id}/stops")
     public ResponseEntity<RouteDetailResponse> getRouteWithStops(@PathVariable Long id) {
         return ResponseEntity.ok(routeService.getRouteById(id));
     }
 
-    // Endpoints protegidos (solo ADMIN)
 
+    // Crea una nueva ruta
     @PostMapping
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<RouteResponse> createRoute(@Valid @RequestBody RouteCreateRequest request) {
@@ -48,6 +50,7 @@ public class CatalogController {
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
+    // Actualiza una ruta existente
     @PutMapping("/{id}")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<RouteResponse> updateRoute(
@@ -57,6 +60,7 @@ public class CatalogController {
         return ResponseEntity.ok(response);
     }
 
+    // Elimina una ruta
     @DeleteMapping("/{id}")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<Void> deleteRoute(@PathVariable Long id) {
@@ -64,6 +68,7 @@ public class CatalogController {
         return ResponseEntity.noContent().build();
     }
 
+    // Agrega una parada a una ruta
     @PostMapping("/{routeId}/stops")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<RouteDetailResponse> addStop(
@@ -73,6 +78,7 @@ public class CatalogController {
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
+    // Elimina una parada de una ruta
     @DeleteMapping("/{routeId}/stops/{stopId}")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<Void> removeStop(

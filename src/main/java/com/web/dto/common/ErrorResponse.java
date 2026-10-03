@@ -9,7 +9,6 @@ public record ErrorResponse(
     Integer status,
     String error,
     String message,
-    String path,
     LocalDateTime timestamp,
     Map<String, String> validationErrors  // Campo->mensaje
 ) implements Serializable {}

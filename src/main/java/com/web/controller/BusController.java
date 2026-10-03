@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.*;
 import java.time.LocalDate;
 import java.util.List;
 
+// Controlador para gestión de buses
 @RestController
 @RequestMapping("/api/v1/buses")
 @RequiredArgsConstructor
@@ -22,6 +23,7 @@ public class BusController {
     
     private final BusService busService;
     
+    // Crea un nuevo bus
     @PostMapping
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<BusResponse> createBus(@Valid @RequestBody BusCreateRequest request) {
@@ -29,24 +31,28 @@ public class BusController {
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
     
+    // Obtiene todos los buses
     @GetMapping
     @PreAuthorize("hasAnyRole('ADMIN', 'DISPATCHER')")
     public ResponseEntity<List<BusResponse>> getAllBuses() {
         return ResponseEntity.ok(busService.getAllBuses());
     }
     
+    // Obtiene un bus por su ID
     @GetMapping("/{id}")
     @PreAuthorize("hasAnyRole('ADMIN', 'DISPATCHER')")
     public ResponseEntity<BusResponse> getBusById(@PathVariable Long id) {
         return ResponseEntity.ok(busService.getBusById(id));
     }
 
+    // Obtiene un bus por su placa
     @GetMapping("/plate/{plate}")
     @PreAuthorize("hasAnyRole('ADMIN', 'DISPATCHER')")
     public ResponseEntity<BusResponse> getBusByPlate(@PathVariable String plate) {
         return ResponseEntity.ok(busService.getBusByPlate(plate));
     }
     
+    // Obtiene buses disponibles para una fecha específica
     @GetMapping("/available")
     @PreAuthorize("hasAnyRole('ADMIN', 'DISPATCHER')")
     public ResponseEntity<List<BusResponse>> getAvailableBuses(
@@ -54,6 +60,7 @@ public class BusController {
         return ResponseEntity.ok(busService.getAvailableBuses(date));
     }
     
+    // Actualiza un bus existente
     @PutMapping("/{id}")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<BusResponse> updateBus(
@@ -63,6 +70,7 @@ public class BusController {
         return ResponseEntity.ok(response);
     }
     
+    // Elimina un bus
     @DeleteMapping("/{id}")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<Void> deleteBus(@PathVariable Long id) {

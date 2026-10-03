@@ -8,7 +8,7 @@ import java.util.Map;
 
 public record BusCreateRequest(
     @NotBlank String plate,
-    @NotNull Integer capacity,
+    @NotNull @jakarta.validation.constraints.Positive Integer capacity,
     Map<String, Object> amenities
 ) implements Serializable {}
 

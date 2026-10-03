@@ -20,6 +20,7 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+
 @DisplayName("BusRepository Integration Tests")
 class BusRepositoryTest extends BaseRepositoryTest {
 

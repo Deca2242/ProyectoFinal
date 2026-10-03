@@ -34,6 +34,14 @@ public class Assignment {
     @Builder.Default
     private Boolean checklistOk = false;
 
+    @Column(name = "soat_valid", nullable = false)
+    @Builder.Default
+    private Boolean soatValid = false;
+
+    @Column(name = "revision_valid", nullable = false)
+    @Builder.Default
+    private Boolean revisionValid = false;
+
     @Column(name = "assigned_at", nullable = false, updatable = false)
     @Builder.Default
     private LocalDateTime assignedAt = LocalDateTime.now();

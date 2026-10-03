@@ -20,6 +20,7 @@ public record TicketCreateRequest(
         Integer toStopOrder,
         @NotNull BigDecimal price,
         @NotNull Ticket.PaymentMethod paymentMethod,
-        BaggageCreateRequest baggage // Opcional
+        BaggageCreateRequest baggage, // Opcional
+        String passengerType // Opcional: "STUDENT", "SENIOR", "CHILD", "ADULT" (default)
 ) implements Serializable {
 }

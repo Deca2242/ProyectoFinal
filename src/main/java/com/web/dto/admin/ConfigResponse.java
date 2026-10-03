@@ -12,6 +12,24 @@ public record ConfigResponse(
     Map<String, Integer> discountPercentages,
     BigDecimal baggageWeightLimit,
     BigDecimal baggagePricePerKg,
+    
+    // Configuraciones adicionales
+    BigDecimal noShowFee,
+    Double overbookingMaxPercentage,
+    
+    // Políticas de Reembolso
+    BigDecimal refundPercentage48Hours,
+    BigDecimal refundPercentage24Hours,
+    BigDecimal refundPercentage12Hours,
+    BigDecimal refundPercentage6Hours,
+    BigDecimal refundPercentageLess6Hours,
+    
+    // Precios de Tickets
+    BigDecimal ticketBasePrice,
+    BigDecimal ticketPriceMultiplierPeakHours,
+    BigDecimal ticketPriceMultiplierHighDemand,
+    BigDecimal ticketPriceMultiplierMediumDemand,
+    
     LocalDateTime lastUpdated
 ) implements Serializable {}
 

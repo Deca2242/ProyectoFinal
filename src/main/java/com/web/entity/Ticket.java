@@ -57,6 +57,39 @@ public class Ticket {
     @Builder.Default
     private LocalDateTime purchasedAt = LocalDateTime.now();
 
+    // Momento en que el pasajero abordó (validación del QR); null si aún no aborda
+    @Column(name = "boarded_at")
+    private LocalDateTime boardedAt;
+
+    // Reembolso entregado al cancelar y momento de la cancelación (cierre de caja)
+    @Column(name = "refund_amount", precision = 10, scale = 2)
+    private BigDecimal refundAmount;
+
+    @Column(name = "cancelled_at")
+    private LocalDateTime cancelledAt;
+
+    // Fee cobrado cuando el pasajero no aborda (regla de no-show)
+    @Column(name = "no_show_fee", precision = 10, scale = 2)
+    private BigDecimal noShowFee;
+
+    // Usuario que registró la venta (cierre de caja por cajero)
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "sold_by_id")
+    private User soldBy;
+
+    // Canal de venta: taquilla o app (métricas de ventas por canal)
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 20)
+    @Builder.Default
+    private SalesChannel channel = SalesChannel.APP;
+
+    // Venta offline: id generado por el dispositivo (idempotencia) y momento en que se sincronizó
+    @Column(name = "offline_client_id", unique = true, length = 64)
+    private String offlineClientId;
+
+    @Column(name = "synced_at")
+    private LocalDateTime syncedAt;
+
     // Relación one-to-one con Baggage
     @OneToOne(mappedBy = "ticket", cascade = CascadeType.ALL, orphanRemoval = true)
     private Baggage baggage;
@@ -66,6 +99,11 @@ public class Ticket {
         TRANSFER,
         QR,
         CARD
+    }
+
+    public enum SalesChannel {
+        APP,
+        BOX_OFFICE
     }
 
     public enum TicketStatus {

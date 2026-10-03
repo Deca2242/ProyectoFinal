@@ -4,9 +4,7 @@ import jakarta.persistence.*;
 import lombok.*;
 
 @Entity
-@Table(name = "seats",
-    uniqueConstraints = @UniqueConstraint(name = "uk_seat_bus_number", columnNames = {"bus_id", "seat_number"})
-)
+@Table(name = "seats")
 @Getter
 @Setter
 @NoArgsConstructor
@@ -19,7 +17,7 @@ public class Seat {
     private Long id;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "bus_id", nullable = false, foreignKey = @ForeignKey(name = "fk_seat_bus"))
+    @JoinColumn(name = "bus_id", nullable = false)
     private Bus bus;
 
     @Column(name = "seat_number", nullable = false)

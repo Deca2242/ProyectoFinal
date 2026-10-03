@@ -6,7 +6,7 @@ import java.io.Serializable;
 import java.util.Map;
 
 public record BusUpdateRequest(
-    Integer capacity,
+    @jakarta.validation.constraints.Positive Integer capacity,
     Map<String, Object> amenities,
     Bus.BusStatus status
 ) implements Serializable {}

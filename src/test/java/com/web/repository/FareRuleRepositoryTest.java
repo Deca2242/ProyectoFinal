@@ -17,6 +17,7 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+
 @DisplayName("FareRuleRepository Integration Tests")
 class FareRuleRepositoryTest extends BaseRepositoryTest {
 

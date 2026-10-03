@@ -7,6 +7,9 @@ import com.web.entity.User;
 import com.web.exception.ResourceNotFoundException;
 import com.web.repository.ConfigRepository;
 import com.web.repository.UserRepository;
+import com.web.exception.BusinessException;
+import org.springframework.http.HttpStatus;
+import java.util.List;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -21,9 +24,12 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class ConfigServiceImpl implements ConfigService {
 
+    private static final List<String> SUPPORTED_DISCOUNT_TYPES = List.of("STUDENT", "SENIOR", "CHILD");
+
     private final ConfigRepository configRepository;
     private final UserRepository userRepository;
 
+    //Obtener toda la configuracion del sistema
     @Override
     @Transactional(readOnly = true)
     public ConfigResponse getConfig() {
@@ -31,8 +37,12 @@ public class ConfigServiceImpl implements ConfigService {
         Integer holdDuration = getIntegerConfig("hold.duration.minutes", 10);
         Integer overbookingPercentage = getIntegerConfig("overbooking.percentage", 5);
         Integer noShowFeePercentage = getIntegerConfig("no.show.fee.percentage", 10);
-        BigDecimal baggageWeightLimit = getDecimalConfig("baggage.weight.limit", BigDecimal.valueOf(23.0));
-        BigDecimal baggagePricePerKg = getDecimalConfig("baggage.price.per.kg", BigDecimal.valueOf(5000));
+        BigDecimal baggageWeightLimit = getDecimalConfig("baggage.weight.limit", BigDecimal.valueOf(20.0));
+        BigDecimal baggagePricePerKg = getDecimalConfig("baggage.price.per.kg", BigDecimal.valueOf(2500));
+
+        // Configuraciones adicionales
+        BigDecimal noShowFee = getNoShowFee();
+        Double overbookingMaxPercentage = getOverbookingMaxPercentage();
 
         // Políticas de Reembolso
         BigDecimal refund48Hours = getRefundPercentage48Hours();
@@ -47,10 +57,8 @@ public class ConfigServiceImpl implements ConfigService {
         BigDecimal ticketMultiplierHighDemand = getTicketPriceMultiplierHighDemand();
         BigDecimal ticketMultiplierMediumDemand = getTicketPriceMultiplierMediumDemand();
 
-        Map<String, Integer> discounts = new HashMap<>();
-        discounts.put("STUDENT", 20);
-        discounts.put("SENIOR", 15);
-        discounts.put("CHILD", 50);
+        // Descuentos desde configuración
+        Map<String, Integer> discounts = getDiscountPercentages();
 
         return new ConfigResponse(
                 holdDuration,
@@ -59,6 +67,8 @@ public class ConfigServiceImpl implements ConfigService {
                 discounts,
                 baggageWeightLimit,
                 baggagePricePerKg,
+                noShowFee,
+                overbookingMaxPercentage,
                 refund48Hours,
                 refund24Hours,
                 refund12Hours,
@@ -71,6 +81,7 @@ public class ConfigServiceImpl implements ConfigService {
                 LocalDateTime.now());
     }
 
+    //Actualizar la configuracion
     @Override
     @Transactional
     public ConfigResponse updateConfig(ConfigUpdateRequest request, Long adminUserId) {
@@ -95,6 +106,29 @@ public class ConfigServiceImpl implements ConfigService {
 
         if (request.baggagePricePerKg() != null) {
             updateConfigValue("baggage.price.per.kg", String.valueOf(request.baggagePricePerKg()), admin);
+        }
+
+        // Descuentos
+        if (request.discountPercentages() != null && !request.discountPercentages().isEmpty()) {
+            for (Map.Entry<String, Integer> entry : request.discountPercentages().entrySet()) {
+                // Solo existen las tarifas especiales niño / estudiante / adulto mayor
+                if (!SUPPORTED_DISCOUNT_TYPES.contains(entry.getKey().toUpperCase(java.util.Locale.ROOT))) {
+                    throw new BusinessException("Tipo de descuento no válido: " + entry.getKey()
+                            + " (válidos: " + String.join(", ", SUPPORTED_DISCOUNT_TYPES) + ")",
+                            HttpStatus.BAD_REQUEST, "INVALID_DISCOUNT_TYPE");
+                }
+                String discountKey = "discount.percentage." + entry.getKey().toLowerCase();
+                updateConfigValue(discountKey, String.valueOf(entry.getValue()), admin);
+            }
+        }
+
+        // Configuraciones adicionales
+        if (request.noShowFee() != null) {
+            updateConfigValue("no.show.fee", String.valueOf(request.noShowFee()), admin);
+        }
+
+        if (request.overbookingMaxPercentage() != null) {
+            updateConfigValue("overbooking.max.percentage", String.valueOf(request.overbookingMaxPercentage()), admin);
         }
 
         // Políticas de Reembolso
@@ -156,13 +190,13 @@ public class ConfigServiceImpl implements ConfigService {
     @Override
     @Transactional(readOnly = true)
     public Double getBaggageWeightLimit() {
-        return getDoubleConfig("baggage.weight.limit", 23.0);
+        return getDoubleConfig("baggage.weight.limit", 20.0);
     }
 
     @Override
     @Transactional(readOnly = true)
     public BigDecimal getExcessFeePerKg() {
-        return getDecimalConfig("baggage.price.per.kg", BigDecimal.valueOf(5000));
+        return getDecimalConfig("baggage.price.per.kg", BigDecimal.valueOf(2500));
     }
 
     @Override
@@ -285,5 +319,23 @@ public class ConfigServiceImpl implements ConfigService {
 
         configRepository.save(config);
 
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Map<String, Integer> getDiscountPercentages() {
+        Map<String, Integer> discounts = new HashMap<>();
+        // Valores por defecto
+        discounts.put("STUDENT", getDiscountPercentage("STUDENT", 20));
+        discounts.put("SENIOR", getDiscountPercentage("SENIOR", 15));
+        discounts.put("CHILD", getDiscountPercentage("CHILD", 50));
+        return discounts;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Integer getDiscountPercentage(String discountType, Integer fallback) {
+        String key = "discount.percentage." + discountType.toLowerCase();
+        return getIntegerConfig(key, fallback);
     }
 }

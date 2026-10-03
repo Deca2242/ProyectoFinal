@@ -11,9 +11,12 @@ import com.web.exception.InvalidCredentialsException;
 import com.web.repository.UserRepository;
 import com.web.util.JwtTokenProvider;
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
 
 @Service
 @RequiredArgsConstructor
@@ -24,16 +27,21 @@ public class AuthServiceImpl implements AuthService {
     private final PasswordEncoder passwordEncoder;
     private final JwtTokenProvider jwtTokenProvider;
 
+    //Registra un nuevo usuario encriptando su contraseña
     @Override
     @Transactional
     public UserResponse register(RegisterRequest request) {
-        if (userRepository.existsByEmail(request.email())) {
-            throw new EmailAlreadyExistsException(request.email());
+        // El email no distingue mayúsculas: Juan@x.com y juan@x.com son la misma cuenta
+        String email = normalizeEmail(request.email());
+        if (userRepository.existsByEmail(email)) {
+            throw new EmailAlreadyExistsException(email);
         }
 
         User user = userMapper.toEntity(request);
+        user.setEmail(email);
 
-        if (user.getRole() == null) {
+        // El registro público solo crea pasajeros; otros roles requieren un ADMIN autenticado
+        if (user.getRole() == null || !isCurrentUserAdmin()) {
             user.setRole(User.Role.PASSENGER);
         }
 
@@ -45,10 +53,11 @@ public class AuthServiceImpl implements AuthService {
         return userMapper.toResponse(savedUser);
     }
 
+    // Autentica usuario y genera token JWT para las peticiones autorizadas
     @Override
     @Transactional(readOnly = true)
     public LoginResponse login(LoginRequest request) {
-        User user = userRepository.findByEmail(request.email())
+        User user = userRepository.findByEmail(normalizeEmail(request.email()))
                 .orElseThrow(() -> new InvalidCredentialsException("Credenciales inválidas"));
 
         if (!passwordEncoder.matches(request.password(), user.getPasswordHash())) {
@@ -67,6 +76,18 @@ public class AuthServiceImpl implements AuthService {
     @Override
     public boolean validateToken(String token) {
         return jwtTokenProvider.validateToken(token);
+    }
+
+    private boolean isCurrentUserAdmin() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        return authentication != null
+                && authentication.isAuthenticated()
+                && authentication.getAuthorities().stream()
+                        .anyMatch(authority -> "ROLE_ADMIN".equals(authority.getAuthority()));
+    }
+
+    private static String normalizeEmail(String email) {
+        return email == null ? null : email.trim().toLowerCase(java.util.Locale.ROOT);
     }
 }
 

@@ -6,11 +6,11 @@ import java.util.Map;
 
 // Analis financiero
 public record RevenueMetrics(
-        BigDecimal totalRevenue,
-        BigDecimal ticketRevenue,
-        BigDecimal parcelRevenue,
-        BigDecimal baggageRevenue,
-        Map<String, BigDecimal> revenueByPaymentMethod,
-        Map<String, BigDecimal> revenueByChannel // "CLERK", "APP"
-) implements Serializable {
+                BigDecimal totalRevenue, // Ingresos totales
+                BigDecimal ticketRevenue,
+                BigDecimal parcelRevenue,
+                BigDecimal baggageRevenue,
+                BigDecimal noShowFeeRevenue,
+                Map<String, BigDecimal> revenueByPaymentMethod,
+                Map<String, BigDecimal> revenueByChannel) implements Serializable {
 }

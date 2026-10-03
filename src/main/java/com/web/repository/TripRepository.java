@@ -18,10 +18,13 @@ public interface TripRepository extends JpaRepository<Trip, Long> {
     // Buscar viajes por ruta, fecha y estado específico
     List<Trip> findByRouteIdAndTripDateAndStatus(Long routeId, LocalDate tripDate, Trip.TripStatus status);
 
+    // Contar viajes futuros de una ruta
+    long countByRouteIdAndTripDateGreaterThanEqual(Long routeId, LocalDate date);
+
     // Buscar viajes por estado
     List<Trip> findByStatus(Trip.TripStatus status);
 
-    // Buscar viajes que salen pronto (para validación de overbooking - Caso de Uso 3)
+    // Buscar viajes que salen pronto overbooking
     @Query("""
         SELECT t FROM Trip t
         WHERE t.status IN ('SCHEDULED', 'BOARDING')
@@ -82,7 +85,7 @@ public interface TripRepository extends JpaRepository<Trip, Long> {
     """)
     List<Trip> findUnassignedTrips(@Param("fromDate") LocalDate fromDate);
 
-    // Buscar viajes por conductor (para horario del conductor)
+    // Buscar viajes por conductor
     @Query("""
         SELECT t FROM Trip t
         JOIN t.assignment a
@@ -121,5 +124,30 @@ public interface TripRepository extends JpaRepository<Trip, Long> {
     Double getAverageOccupancy(
         @Param("startDate") LocalDate startDate,
         @Param("endDate") LocalDate endDate
+    );
+
+    // IDs de buses que ya tienen un viaje no cancelado en la fecha (para disponibilidad de flota)
+    @Query("""
+                SELECT DISTINCT t.bus.id FROM Trip t
+                WHERE t.tripDate = :date
+                AND t.status <> 'CANCELLED'
+            """)
+    List<Long> findBusIdsWithTripsOnDate(@Param("date") LocalDate date);
+
+    // Bloquea la fila del viaje (SELECT ... FOR UPDATE) hasta el fin de la transacción:
+    // serializa ventas, holds y aprobaciones de overbooking del mismo viaje para evitar doble venta
+    @Query(value = "SELECT id FROM trips WHERE id = :id FOR UPDATE", nativeQuery = true)
+    Optional<Long> lockById(@Param("id") Long id);
+
+    // Viajes en curso que llegan dentro de la ventana y aún no tienen aviso de llegada próxima
+    @Query("""
+                SELECT t FROM Trip t
+                WHERE t.status = 'DEPARTED'
+                AND t.arrivalNotified = false
+                AND t.arrivalEta BETWEEN :from AND :to
+            """)
+    List<Trip> findDepartedTripsArrivingBetween(
+        @Param("from") LocalDateTime from,
+        @Param("to") LocalDateTime to
     );
 }

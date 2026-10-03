@@ -3,15 +3,18 @@ package com.web.dto.parcel.mapper;
 import com.web.dto.parcel.ParcelCreateRequest;
 import com.web.dto.parcel.ParcelResponse;
 import com.web.entity.Parcel;
+import org.mapstruct.InheritConfiguration;
 import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
+import org.mapstruct.Named;
 
 import java.util.List;
 
 @Mapper(componentModel = "spring")
 public interface ParcelMapper {
     
-    // Entity → Response con info mínima de tramos
+    // Entity → Response completa, con el OTP de entrega: solo para quien registra la encomienda (taquilla)
+    @Named("toResponseWithOtp")
     @Mapping(target = "tripId", source = "trip.id")
     @Mapping(target = "routeName", source = "trip.route.name")
     @Mapping(target = "tripDate", source = "trip.tripDate")
@@ -19,7 +22,22 @@ public interface ParcelMapper {
     @Mapping(target = "fromStopName", source = "fromStop.name")
     @Mapping(target = "toStopId", source = "toStop.id")
     @Mapping(target = "toStopName", source = "toStop.name")
+    ParcelResponse toResponseWithOtp(Parcel parcel);
+
+    // Entity → Response para el personal (conductor, taquilla): sin el OTP, que solo conoce el destinatario
+    @InheritConfiguration(name = "toResponseWithOtp")
+    @Mapping(target = "deliveryOtp", ignore = true)
     ParcelResponse toResponse(Parcel parcel);
+
+    // Entity → Response para el rastreo público: sin OTP ni datos personales de remitente/destinatario
+    @Named("toPublicResponse")
+    @InheritConfiguration(name = "toResponseWithOtp")
+    @Mapping(target = "deliveryOtp", ignore = true)
+    @Mapping(target = "senderName", ignore = true)
+    @Mapping(target = "senderPhone", ignore = true)
+    @Mapping(target = "receiverName", ignore = true)
+    @Mapping(target = "receiverPhone", ignore = true)
+    ParcelResponse toPublicResponse(Parcel parcel);
     
     List<ParcelResponse> toResponseList(List<Parcel> parcels);
     

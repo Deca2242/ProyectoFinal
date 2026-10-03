@@ -16,6 +16,7 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+
 @DisplayName("TripRepository Integration Tests")
 class TripRepositoryTest extends BaseRepositoryTest {
 

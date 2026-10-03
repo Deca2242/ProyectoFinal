@@ -14,6 +14,7 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+
 @DisplayName("SeatRepository Integration Tests")
 class SeatRepositoryTest extends BaseRepositoryTest {
 

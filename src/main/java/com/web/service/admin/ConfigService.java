@@ -4,6 +4,7 @@ import com.web.dto.admin.ConfigResponse;
 import com.web.dto.admin.ConfigUpdateRequest;
 
 import java.math.BigDecimal;
+import java.util.Map;
 
 public interface ConfigService {
 
@@ -40,4 +41,9 @@ public interface ConfigService {
     BigDecimal getTicketPriceMultiplierHighDemand();
 
     BigDecimal getTicketPriceMultiplierMediumDemand();
+
+    // Descuentos
+    Map<String, Integer> getDiscountPercentages();
+
+    Integer getDiscountPercentage(String discountType, Integer fallback);
 }
