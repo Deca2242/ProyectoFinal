@@ -61,7 +61,7 @@ class UserControllerTest {
     @Test
     @WithMockUser(roles = "ADMIN")
     void getUsers_shouldReturn200WithoutPasswordHash() throws Exception {
-        when(userService.getUsers(User.Role.DRIVER, User.Status.ACTIVE))
+        when(userService.getUsers(User.Role.DRIVER, User.Status.ACTIVE, null))
                 .thenReturn(List.of(driver(User.Role.DRIVER, User.Status.ACTIVE)));
 
         mvc.perform(get("/api/v1/admin/users").param("role", "DRIVER").param("status", "ACTIVE"))
@@ -74,11 +74,11 @@ class UserControllerTest {
     @Test
     @WithMockUser(roles = "ADMIN")
     void getUsers_withoutFilters_shouldReturn200() throws Exception {
-        when(userService.getUsers(null, null)).thenReturn(List.of());
+        when(userService.getUsers(null, null, null)).thenReturn(List.of());
 
         mvc.perform(get("/api/v1/admin/users"))
                 .andExpect(status().isOk());
-        verify(userService).getUsers(null, null);
+        verify(userService).getUsers(null, null, null);
     }
 
     // Verifica 400 con un rol inexistente
@@ -260,5 +260,75 @@ class UserControllerTest {
         mvc.perform(put("/api/v1/users/me/password").contentType(MediaType.APPLICATION_JSON)
                         .content(om.writeValueAsString(new PasswordChangeRequest("actual123", "nueva12345"))))
                 .andExpect(status().isUnauthorized());
+    }
+
+    // Verifica 400 cuando la nueva contraseña es igual a la actual
+    @Test
+    @WithMockUser(roles = "DRIVER")
+    void changePassword_shouldReturn400WhenNewPasswordEqualsCurrent() throws Exception {
+        mvc.perform(put("/api/v1/users/me/password").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"currentPassword\":\"misma12345\",\"newPassword\":\"misma12345\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.validationErrors.newPasswordDifferent").exists());
+        verifyNoInteractions(userService);
+    }
+
+    // ---------- Búsqueda y detalle de usuarios (ADMIN) ----------
+
+    // Verifica que el texto "q" llegue al servicio junto con los filtros
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void getUsers_withSearchText_shouldPassItToService() throws Exception {
+        when(userService.getUsers(User.Role.DRIVER, null, "drive"))
+                .thenReturn(List.of(driver(User.Role.DRIVER, User.Status.ACTIVE)));
+
+        mvc.perform(get("/api/v1/admin/users").param("role", "DRIVER").param("q", "drive"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].email").value("driver@test.com"));
+        verify(userService).getUsers(User.Role.DRIVER, null, "drive");
+    }
+
+    // Verifica el detalle de un usuario por id
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void getUser_shouldReturn200() throws Exception {
+        when(userService.getById(2L)).thenReturn(driver(User.Role.DRIVER, User.Status.ACTIVE));
+
+        mvc.perform(get("/api/v1/admin/users/2"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(2))
+                .andExpect(jsonPath("$.passwordHash").doesNotExist());
+    }
+
+    // Verifica 404 cuando el usuario no existe
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void getUser_shouldReturn404WhenNotFound() throws Exception {
+        when(userService.getById(99L)).thenThrow(new ResourceNotFoundException("Usuario", 99L));
+
+        mvc.perform(get("/api/v1/admin/users/99"))
+                .andExpect(status().isNotFound());
+    }
+
+    // Verifica que un DISPATCHER no vea el detalle de usuarios
+    @Test
+    @WithMockUser(roles = "DISPATCHER")
+    void getUser_shouldReturn403ForDispatcher() throws Exception {
+        mvc.perform(get("/api/v1/admin/users/2"))
+                .andExpect(status().isForbidden());
+        verifyNoInteractions(userService);
+    }
+
+    // Verifica 409 al desactivar al último ADMIN activo
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void updateStatus_shouldReturn409WhenLastAdmin() throws Exception {
+        when(userService.updateStatus(1L, User.Status.INACTIVE)).thenThrow(new BusinessException(
+                "No se puede desactivar ni cambiar el rol del último administrador activo",
+                HttpStatus.CONFLICT, "LAST_ADMIN"));
+
+        mvc.perform(patch("/api/v1/admin/users/1/status").contentType(MediaType.APPLICATION_JSON)
+                        .content(om.writeValueAsString(Map.of("status", "INACTIVE"))))
+                .andExpect(status().isConflict());
     }
 }

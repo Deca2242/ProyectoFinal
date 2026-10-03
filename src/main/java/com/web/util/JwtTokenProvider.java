@@ -32,6 +32,14 @@ public class JwtTokenProvider {
                 .sign(Algorithm.HMAC512(secret));
     }
 
+    // Verifica firma y expiración y devuelve el token decodificado (sujeto, rol e "iat");
+    // lanza JWTVerificationException si el token no es válido
+    public DecodedJWT verify(String token) {
+        return JWT.require(Algorithm.HMAC512(secret))
+                .build()
+                .verify(token);
+    }
+
     public boolean validateToken(String token) {
         try {
             JWT.require(Algorithm.HMAC512(secret))

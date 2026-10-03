@@ -4,6 +4,7 @@ import com.web.dto.admin.ConfigResponse;
 import com.web.dto.admin.ConfigUpdateRequest;
 import com.web.entity.Config;
 import com.web.entity.User;
+import com.web.exception.BusinessException;
 import com.web.exception.ResourceNotFoundException;
 import com.web.repository.ConfigRepository;
 import com.web.repository.UserRepository;
@@ -17,6 +18,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpStatus;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -89,7 +91,7 @@ class ConfigServiceImplTest {
                 BigDecimal.valueOf(95), BigDecimal.valueOf(75), BigDecimal.valueOf(55),
                 BigDecimal.valueOf(35), BigDecimal.ZERO,
                 BigDecimal.valueOf(55000), BigDecimal.valueOf(1.2),
-                BigDecimal.valueOf(1.3), BigDecimal.valueOf(1.15)
+                BigDecimal.valueOf(1.3), BigDecimal.valueOf(1.15), null, null, null, null, null, null, null
         );
 
         when(userRepository.findById(1L)).thenReturn(Optional.of(admin));
@@ -309,7 +311,8 @@ class ConfigServiceImplTest {
         // Given
         Map<String, String> values = new HashMap<>();
         values.put("hold.duration.minutes", "12");
-        values.put("overbooking.percentage", "7");
+        // Misma política que overbooking.max.percentage (0.08): el entero se deriva de la fracción
+        values.put("overbooking.percentage", "8");
         values.put("no.show.fee.percentage", "15");
         values.put("baggage.weight.limit", "25");
         values.put("baggage.price.per.kg", "3000");
@@ -327,6 +330,13 @@ class ConfigServiceImplTest {
         values.put("discount.percentage.student", "25");
         values.put("discount.percentage.senior", "10");
         values.put("discount.percentage.child", "40");
+        values.put("baggage.weight.max", "45.5");
+        values.put("parcel.otp.max.attempts", "5");
+        values.put("hold.max.per.user.trip", "6");
+        values.put("no.show.window.minutes", "7");
+        values.put("overbooking.min.occupancy", "0.9");
+        values.put("overbooking.window.minutes", "45");
+        values.put("ticket.dynamic.pricing.default", "true");
         stubConfigs(values);
 
         // When
@@ -334,7 +344,14 @@ class ConfigServiceImplTest {
 
         // Then
         assertThat(result.holdDurationMinutes()).isEqualTo(12);
-        assertThat(result.overbookingPercentage()).isEqualTo(7);
+        assertThat(result.overbookingPercentage()).isEqualTo(8);
+        assertThat(result.baggageWeightMax()).isEqualTo(45.5);
+        assertThat(result.parcelOtpMaxAttempts()).isEqualTo(5);
+        assertThat(result.maxActiveHoldsPerUserAndTrip()).isEqualTo(6);
+        assertThat(result.noShowWindowMinutes()).isEqualTo(7);
+        assertThat(result.overbookingMinOccupancy()).isEqualTo(0.9);
+        assertThat(result.overbookingWindowMinutes()).isEqualTo(45);
+        assertThat(result.dynamicPricingDefault()).isTrue();
         assertThat(result.noShowFeePercentage()).isEqualTo(15);
         assertThat(result.baggageWeightLimit()).isEqualByComparingTo("25");
         assertThat(result.baggagePricePerKg()).isEqualByComparingTo("3000");
@@ -386,32 +403,38 @@ class ConfigServiceImplTest {
         assertThat(result.discountPercentages()).containsEntry("STUDENT", 20);
     }
 
-    // Casos: clave persistida, campo del request a modificar y valor esperado como texto
+    // Casos: clave persistida, campo del request a modificar, valor esperado como texto y tipo de dato.
+    // Las dos claves de overbooking se prueban aparte porque se sincronizan entre sí
     static Stream<Arguments> singleFieldUpdateCases() {
         return Stream.of(
-                Arguments.of("hold.duration.minutes", field(b -> b.holdDurationMinutes = 15), "15"),
-                Arguments.of("overbooking.percentage", field(b -> b.overbookingPercentage = 8), "8"),
-                Arguments.of("no.show.fee.percentage", field(b -> b.noShowFeePercentage = 12), "12"),
-                Arguments.of("baggage.weight.limit", field(b -> b.baggageWeightLimit = new BigDecimal("25.5")), "25.5"),
-                Arguments.of("baggage.price.per.kg", field(b -> b.baggagePricePerKg = new BigDecimal("3000")), "3000"),
-                Arguments.of("no.show.fee", field(b -> b.noShowFee = new BigDecimal("15000")), "15000"),
-                Arguments.of("overbooking.max.percentage", field(b -> b.overbookingMaxPercentage = 0.1), "0.1"),
-                Arguments.of("refund.policy.48hours.percentage", field(b -> b.refund48 = new BigDecimal("95")), "95"),
-                Arguments.of("refund.policy.24hours.percentage", field(b -> b.refund24 = new BigDecimal("75")), "75"),
-                Arguments.of("refund.policy.12hours.percentage", field(b -> b.refund12 = new BigDecimal("55")), "55"),
-                Arguments.of("refund.policy.6hours.percentage", field(b -> b.refund6 = new BigDecimal("35")), "35"),
-                Arguments.of("refund.policy.less.6hours.percentage", field(b -> b.refundLess6 = new BigDecimal("5")), "5"),
-                Arguments.of("ticket.base.price", field(b -> b.ticketBasePrice = new BigDecimal("55000")), "55000"),
-                Arguments.of("ticket.price.multiplier.peak.hours", field(b -> b.peak = new BigDecimal("1.25")), "1.25"),
-                Arguments.of("ticket.price.multiplier.high.demand", field(b -> b.high = new BigDecimal("1.3")), "1.3"),
-                Arguments.of("ticket.price.multiplier.medium.demand", field(b -> b.medium = new BigDecimal("1.15")), "1.15")
+                Arguments.of("hold.duration.minutes", field(b -> b.holdDurationMinutes = 15), "15", Config.DataType.INTEGER),
+                Arguments.of("no.show.fee.percentage", field(b -> b.noShowFeePercentage = 12), "12", Config.DataType.INTEGER),
+                Arguments.of("baggage.weight.limit", field(b -> b.baggageWeightLimit = new BigDecimal("25.5")), "25.5", Config.DataType.DECIMAL),
+                Arguments.of("baggage.price.per.kg", field(b -> b.baggagePricePerKg = new BigDecimal("3000")), "3000", Config.DataType.DECIMAL),
+                Arguments.of("no.show.fee", field(b -> b.noShowFee = new BigDecimal("15000")), "15000", Config.DataType.DECIMAL),
+                Arguments.of("refund.policy.48hours.percentage", field(b -> b.refund48 = new BigDecimal("95")), "95", Config.DataType.DECIMAL),
+                Arguments.of("refund.policy.24hours.percentage", field(b -> b.refund24 = new BigDecimal("75")), "75", Config.DataType.DECIMAL),
+                Arguments.of("refund.policy.12hours.percentage", field(b -> b.refund12 = new BigDecimal("55")), "55", Config.DataType.DECIMAL),
+                Arguments.of("refund.policy.6hours.percentage", field(b -> b.refund6 = new BigDecimal("35")), "35", Config.DataType.DECIMAL),
+                Arguments.of("refund.policy.less.6hours.percentage", field(b -> b.refundLess6 = new BigDecimal("5")), "5", Config.DataType.DECIMAL),
+                Arguments.of("ticket.base.price", field(b -> b.ticketBasePrice = new BigDecimal("55000")), "55000", Config.DataType.DECIMAL),
+                Arguments.of("ticket.price.multiplier.peak.hours", field(b -> b.peak = new BigDecimal("1.25")), "1.25", Config.DataType.DECIMAL),
+                Arguments.of("ticket.price.multiplier.high.demand", field(b -> b.high = new BigDecimal("1.3")), "1.3", Config.DataType.DECIMAL),
+                Arguments.of("ticket.price.multiplier.medium.demand", field(b -> b.medium = new BigDecimal("1.15")), "1.15", Config.DataType.DECIMAL),
+                Arguments.of("baggage.weight.max", field(b -> b.baggageWeightMax = 40.0), "40.0", Config.DataType.DECIMAL),
+                Arguments.of("parcel.otp.max.attempts", field(b -> b.parcelOtpMaxAttempts = 4), "4", Config.DataType.INTEGER),
+                Arguments.of("hold.max.per.user.trip", field(b -> b.maxActiveHolds = 2), "2", Config.DataType.INTEGER),
+                Arguments.of("no.show.window.minutes", field(b -> b.noShowWindowMinutes = 10), "10", Config.DataType.INTEGER),
+                Arguments.of("overbooking.min.occupancy", field(b -> b.overbookingMinOccupancy = 0.9), "0.9", Config.DataType.DECIMAL),
+                Arguments.of("overbooking.window.minutes", field(b -> b.overbookingWindowMinutes = 20), "20", Config.DataType.INTEGER),
+                Arguments.of("ticket.dynamic.pricing.default", field(b -> b.dynamicPricingDefault = true), "true", Config.DataType.BOOLEAN)
         );
     }
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("singleFieldUpdateCases")
     void shouldUpdateConfig_WithSingleField_CreateNewConfigForThatKey(
-            String expectedKey, Consumer<RequestBuilder> field, String expectedValue) {
+            String expectedKey, Consumer<RequestBuilder> field, String expectedValue, Config.DataType expectedType) {
         // Given: la clave aún no existe en BD, así que se crea una Config nueva
         ConfigUpdateRequest request = new RequestBuilder().with(field).build();
         when(userRepository.findById(1L)).thenReturn(Optional.of(admin));
@@ -427,9 +450,133 @@ class ConfigServiceImplTest {
         assertThat(saved.getId()).isNull();
         assertThat(saved.getConfigKey()).isEqualTo(expectedKey);
         assertThat(saved.getConfigValue()).isEqualTo(expectedValue);
-        assertThat(saved.getDataType()).isEqualTo(Config.DataType.STRING);
+        // El tipo de dato depende de la clave (antes todas las claves nuevas se guardaban como STRING)
+        assertThat(saved.getDataType()).isEqualTo(expectedType);
         assertThat(saved.getUpdatedBy()).isSameAs(admin);
         assertThat(saved.getUpdatedAt()).isNotNull();
+    }
+
+    @Test
+    void shouldUpdateConfig_WithOverbookingPercentage_SyncMaxPercentageFraction() {
+        // Given: porcentaje entero y fracción son la misma política
+        ConfigUpdateRequest request = new RequestBuilder().with(b -> b.overbookingPercentage = 8).build();
+        when(userRepository.findById(1L)).thenReturn(Optional.of(admin));
+        useInMemoryStore();
+
+        // When
+        ConfigResponse result = configService.updateConfig(request, 1L);
+
+        // Then
+        ArgumentCaptor<Config> captor = ArgumentCaptor.forClass(Config.class);
+        verify(configRepository, times(2)).save(captor.capture());
+        Map<String, Config> saved = captor.getAllValues().stream()
+                .collect(Collectors.toMap(Config::getConfigKey, Function.identity()));
+        assertThat(saved.get("overbooking.percentage").getConfigValue()).isEqualTo("8");
+        assertThat(saved.get("overbooking.percentage").getDataType()).isEqualTo(Config.DataType.INTEGER);
+        assertThat(saved.get("overbooking.max.percentage").getConfigValue()).isEqualTo("0.08");
+        assertThat(saved.get("overbooking.max.percentage").getDataType()).isEqualTo(Config.DataType.DECIMAL);
+        assertThat(result.overbookingPercentage()).isEqualTo(8);
+        assertThat(result.overbookingMaxPercentage()).isEqualTo(0.08);
+    }
+
+    @Test
+    void shouldUpdateConfig_WithOverbookingMaxPercentage_SyncIntegerPercentage() {
+        // Given
+        ConfigUpdateRequest request = new RequestBuilder().with(b -> b.overbookingMaxPercentage = 0.1).build();
+        when(userRepository.findById(1L)).thenReturn(Optional.of(admin));
+        useInMemoryStore();
+
+        // When
+        ConfigResponse result = configService.updateConfig(request, 1L);
+
+        // Then
+        verify(configRepository, times(2)).save(any(Config.class));
+        assertThat(result.overbookingMaxPercentage()).isEqualTo(0.1);
+        assertThat(result.overbookingPercentage()).isEqualTo(10);
+    }
+
+    @Test
+    void shouldUpdateConfig_WithExistingStringRow_FixDataType() {
+        // Given: una fila antigua guardada como STRING para una clave numérica
+        Config legacy = configWith("baggage.weight.max", "50.0");
+        ConfigUpdateRequest request = new RequestBuilder().with(b -> b.baggageWeightMax = 35.0).build();
+        when(userRepository.findById(1L)).thenReturn(Optional.of(admin));
+        when(configRepository.findByConfigKey(anyString())).thenAnswer(inv ->
+                "baggage.weight.max".equals(inv.getArgument(0)) ? Optional.of(legacy) : Optional.empty());
+
+        // When
+        configService.updateConfig(request, 1L);
+
+        // Then
+        verify(configRepository).save(legacy);
+        assertThat(legacy.getConfigValue()).isEqualTo("35.0");
+        assertThat(legacy.getDataType()).isEqualTo(Config.DataType.DECIMAL);
+    }
+
+    @Test
+    void shouldResolveDataType_ByKey() {
+        // When/Then
+        assertThat(ConfigServiceImpl.dataTypeOf("hold.duration.minutes")).isEqualTo(Config.DataType.INTEGER);
+        assertThat(ConfigServiceImpl.dataTypeOf("discount.percentage.student")).isEqualTo(Config.DataType.INTEGER);
+        assertThat(ConfigServiceImpl.dataTypeOf("refund.policy.6hours.percentage")).isEqualTo(Config.DataType.DECIMAL);
+        assertThat(ConfigServiceImpl.dataTypeOf("ticket.dynamic.pricing.default")).isEqualTo(Config.DataType.BOOLEAN);
+        assertThat(ConfigServiceImpl.dataTypeOf("seed.hardened.at")).isEqualTo(Config.DataType.STRING);
+    }
+
+    // ------------------------------------------------------------------
+    // Política de reembolso monótona
+    // ------------------------------------------------------------------
+
+    @Test
+    void shouldUpdateConfig_WithRefundAboveCurrentLongerWindow_ThrowNotMonotonic() {
+        // Given: 24h = 95 % supera al 48h vigente (90 % por defecto)
+        ConfigUpdateRequest request = new RequestBuilder().with(b -> b.refund24 = new BigDecimal("95")).build();
+        when(userRepository.findById(1L)).thenReturn(Optional.of(admin));
+        stubConfigs(Map.of());
+
+        // When/Then
+        assertThatThrownBy(() -> configService.updateConfig(request, 1L))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    assertThat(((BusinessException) ex).getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+                    assertThat(((BusinessException) ex).getCode()).isEqualTo("REFUND_POLICY_NOT_MONOTONIC");
+                });
+        verify(configRepository, never()).save(any(Config.class));
+    }
+
+    @Test
+    void shouldUpdateConfig_WithRefundBelowStoredShorterWindow_ThrowNotMonotonic() {
+        // Given: en BD el 6h vale 40 %; bajar el 12h a 35 % rompe 12h >= 6h
+        ConfigUpdateRequest request = new RequestBuilder().with(b -> b.refund12 = new BigDecimal("35")).build();
+        when(userRepository.findById(1L)).thenReturn(Optional.of(admin));
+        stubConfigs(Map.of("refund.policy.6hours.percentage", "40"));
+
+        // When/Then
+        assertThatThrownBy(() -> configService.updateConfig(request, 1L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("no creciente");
+        verify(configRepository, never()).save(any(Config.class));
+    }
+
+    @Test
+    void shouldUpdateConfig_WithWholeRefundPolicyEqualValues_Accept() {
+        // Given: valores iguales cumplen la regla (no creciente) aunque los vigentes no la cumplieran
+        ConfigUpdateRequest request = new RequestBuilder().with(b -> {
+            b.refund48 = new BigDecimal("50");
+            b.refund24 = new BigDecimal("50");
+            b.refund12 = new BigDecimal("50");
+            b.refund6 = new BigDecimal("50");
+            b.refundLess6 = new BigDecimal("50");
+        }).build();
+        when(userRepository.findById(1L)).thenReturn(Optional.of(admin));
+        useInMemoryStore();
+
+        // When
+        ConfigResponse result = configService.updateConfig(request, 1L);
+
+        // Then
+        verify(configRepository, times(5)).save(any(Config.class));
+        assertThat(result.refundPercentageLess6Hours()).isEqualByComparingTo("50");
     }
 
     @Test
@@ -516,6 +663,13 @@ class ConfigServiceImplTest {
             b.peak = new BigDecimal("1.25");
             b.high = new BigDecimal("1.3");
             b.medium = new BigDecimal("1.15");
+            b.baggageWeightMax = 40.0;
+            b.parcelOtpMaxAttempts = 4;
+            b.maxActiveHolds = 2;
+            b.noShowWindowMinutes = 10;
+            b.overbookingMinOccupancy = 0.9;
+            b.overbookingWindowMinutes = 20;
+            b.dynamicPricingDefault = true;
         }).build();
         when(userRepository.findById(1L)).thenReturn(Optional.of(admin));
         useInMemoryStore();
@@ -523,11 +677,19 @@ class ConfigServiceImplTest {
         // When
         ConfigResponse result = configService.updateConfig(request, 1L);
 
-        // Then: 16 campos simples + 1 descuento
-        verify(configRepository, times(17)).save(any(Config.class));
+        // Then: 23 campos simples + 1 descuento + 2 escrituras de sincronización de las claves de overbooking
+        verify(configRepository, times(26)).save(any(Config.class));
         assertThat(result.holdDurationMinutes()).isEqualTo(15);
         assertThat(result.noShowFeePercentage()).isEqualTo(12);
-        assertThat(result.overbookingPercentage()).isEqualTo(8);
+        // overbookingMaxPercentage se aplica después de overbookingPercentage y ambas claves son la misma política
+        assertThat(result.overbookingPercentage()).isEqualTo(10);
+        assertThat(result.baggageWeightMax()).isEqualTo(40.0);
+        assertThat(result.parcelOtpMaxAttempts()).isEqualTo(4);
+        assertThat(result.maxActiveHoldsPerUserAndTrip()).isEqualTo(2);
+        assertThat(result.noShowWindowMinutes()).isEqualTo(10);
+        assertThat(result.overbookingMinOccupancy()).isEqualTo(0.9);
+        assertThat(result.overbookingWindowMinutes()).isEqualTo(20);
+        assertThat(result.dynamicPricingDefault()).isTrue();
         assertThat(result.discountPercentages())
                 .containsExactlyInAnyOrderEntriesOf(Map.of("STUDENT", 20, "SENIOR", 15, "CHILD", 40));
         assertThat(result.baggageWeightLimit()).isEqualByComparingTo("25");
@@ -644,6 +806,13 @@ class ConfigServiceImplTest {
         BigDecimal peak;
         BigDecimal high;
         BigDecimal medium;
+        Double baggageWeightMax;
+        Integer parcelOtpMaxAttempts;
+        Integer maxActiveHolds;
+        Integer noShowWindowMinutes;
+        Double overbookingMinOccupancy;
+        Integer overbookingWindowMinutes;
+        Boolean dynamicPricingDefault;
 
         RequestBuilder with(Consumer<RequestBuilder> setter) {
             setter.accept(this);
@@ -655,7 +824,9 @@ class ConfigServiceImplTest {
                     holdDurationMinutes, noShowFeePercentage, overbookingPercentage, discounts,
                     baggageWeightLimit, baggagePricePerKg, noShowFee, overbookingMaxPercentage,
                     refund48, refund24, refund12, refund6, refundLess6,
-                    ticketBasePrice, peak, high, medium);
+                    ticketBasePrice, peak, high, medium,
+                    baggageWeightMax, parcelOtpMaxAttempts, maxActiveHolds, noShowWindowMinutes,
+                    overbookingMinOccupancy, overbookingWindowMinutes, dynamicPricingDefault);
         }
     }
 }

@@ -22,13 +22,21 @@ public class UserController {
 
     private final UserService userService;
 
-    // Lista de usuarios con filtros opcionales por rol y estado
+    // Lista de usuarios con filtros opcionales por rol, estado y texto (nombre, email o teléfono)
     @GetMapping("/admin/users")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<List<UserResponse>> getUsers(
             @RequestParam(required = false) User.Role role,
-            @RequestParam(required = false) User.Status status) {
-        return ResponseEntity.ok(userService.getUsers(role, status));
+            @RequestParam(required = false) User.Status status,
+            @RequestParam(required = false) String q) {
+        return ResponseEntity.ok(userService.getUsers(role, status, q));
+    }
+
+    // Detalle de un usuario (404 si no existe)
+    @GetMapping("/admin/users/{id}")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<UserResponse> getUser(@PathVariable Long id) {
+        return ResponseEntity.ok(userService.getById(id));
     }
 
     // Activa o desactiva un usuario

@@ -94,7 +94,7 @@ class AdminConfigTest {
                                 BigDecimal.valueOf(10), BigDecimal.ZERO,
                                 BigDecimal.valueOf(50000), BigDecimal.valueOf(1.2), BigDecimal.valueOf(1.15),
                                 BigDecimal.valueOf(1.05),
-                                LocalDateTime.now());
+                                LocalDateTime.now(), null, null, null, null, null, null, null);
 
                 when(configService.getConfig()).thenReturn(config);
 
@@ -125,7 +125,7 @@ class AdminConfigTest {
                                 BigDecimal.valueOf(40), // 12h → 40% reembolso
                                 BigDecimal.valueOf(15), // 6h → 15% reembolso
                                 BigDecimal.valueOf(5), // <6h → 5% reembolso
-                                null, null, null, null);
+                                null, null, null, null, null, null, null, null, null, null, null);
 
                 Map<String, Integer> discounts = new HashMap<>();
                 var updatedConfig = new ConfigResponse(
@@ -136,7 +136,7 @@ class AdminConfigTest {
                                 BigDecimal.valueOf(15), BigDecimal.valueOf(5),
                                 BigDecimal.valueOf(50000), BigDecimal.valueOf(1.2), BigDecimal.valueOf(1.15),
                                 BigDecimal.valueOf(1.05),
-                                LocalDateTime.now());
+                                LocalDateTime.now(), null, null, null, null, null, null, null);
 
                 when(configService.updateConfig(any(ConfigUpdateRequest.class), eq(1L)))
                                 .thenReturn(updatedConfig);
@@ -167,7 +167,7 @@ class AdminConfigTest {
                                 null, null, null, newDiscounts, null, null,
                                 null, null,
                                 null, null, null, null, null,
-                                null, null, null, null);
+                                null, null, null, null, null, null, null, null, null, null, null);
 
                 var updatedConfig = new ConfigResponse(
                                 10, 10, 5, newDiscounts,
@@ -177,7 +177,7 @@ class AdminConfigTest {
                                 BigDecimal.valueOf(10), BigDecimal.ZERO,
                                 BigDecimal.valueOf(50000), BigDecimal.valueOf(1.2), BigDecimal.valueOf(1.15),
                                 BigDecimal.valueOf(1.05),
-                                LocalDateTime.now());
+                                LocalDateTime.now(), null, null, null, null, null, null, null);
 
                 when(configService.updateConfig(any(ConfigUpdateRequest.class), eq(1L)))
                                 .thenReturn(updatedConfig);
@@ -204,7 +204,8 @@ class AdminConfigTest {
                                 BigDecimal.valueOf(55000), // Precio base: $55,000
                                 BigDecimal.valueOf(1.3), // Hora pico: +30%
                                 BigDecimal.valueOf(1.2), // Alta demanda: +20%
-                                BigDecimal.valueOf(1.1) // Demanda media: +10%
+                                BigDecimal.valueOf(1.1), // Demanda media: +10%
+                                null, null, null, null, null, null, null
                 );
 
                 Map<String, Integer> discounts = new HashMap<>();
@@ -216,7 +217,7 @@ class AdminConfigTest {
                                 BigDecimal.valueOf(10), BigDecimal.ZERO,
                                 BigDecimal.valueOf(55000), BigDecimal.valueOf(1.3), BigDecimal.valueOf(1.2),
                                 BigDecimal.valueOf(1.1),
-                                LocalDateTime.now());
+                                LocalDateTime.now(), null, null, null, null, null, null, null);
 
                 when(configService.updateConfig(any(ConfigUpdateRequest.class), eq(1L)))
                                 .thenReturn(updatedConfig);
@@ -241,7 +242,7 @@ class AdminConfigTest {
                                 null, null, null, null, null, null,
                                 null, null,
                                 null, null, null, null, null,
-                                null, null, null, null);
+                                null, null, null, null, null, null, null, null, null, null, null);
 
                 // Simular respuesta del servicio
                 Map<String, Integer> discounts = new HashMap<>();
@@ -253,7 +254,7 @@ class AdminConfigTest {
                                 BigDecimal.valueOf(10), BigDecimal.ZERO,
                                 BigDecimal.valueOf(50000), BigDecimal.valueOf(1.2), BigDecimal.valueOf(1.15),
                                 BigDecimal.valueOf(1.05),
-                                LocalDateTime.now());
+                                LocalDateTime.now(), null, null, null, null, null, null, null);
                 when(configService.updateConfig(any(ConfigUpdateRequest.class), eq(1L)))
                                 .thenReturn(updatedConfig);
 

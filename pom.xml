@@ -125,8 +125,13 @@
                 <artifactId>maven-compiler-plugin</artifactId>
                 <version>3.8.1</version>
                 <configuration>
-                    <source>21</source>   <!-- Version de java -->
-                    <target>21</target> <!-- Version de java -->
+                    <!-- Versión de Java: "release" también fija la API del JDK (source/target solo el bytecode) -->
+                    <release>21</release>
+                    <!-- Nombres de parámetros en el bytecode (@PathVariable/@RequestParam sin nombre explícito).
+                         Con <release> esta versión del plugin ignora <parameters>, por eso se pasa el flag a javac -->
+                    <compilerArgs>
+                        <arg>-parameters</arg>
+                    </compilerArgs>
                     <!-- Siempre va primero mapstruct y despues lombok -->
                     <annotationProcessorPaths>
                         <path>
@@ -137,7 +142,8 @@
                         <path>
                             <groupId>org.projectlombok</groupId>
                             <artifactId>lombok</artifactId>
-                            <version>1.18.30</version>
+                            <!-- Misma versión que la dependencia (gestionada por spring-boot-starter-parent) -->
+                            <version>${lombok.version}</version>
                         </path>
                         <path>
                             <groupId>org.projectlombok</groupId>

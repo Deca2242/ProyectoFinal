@@ -19,12 +19,39 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 
+/**
+ * Configuración del sistema editable por ADMIN (tabla "config", clave → valor).
+ * <ul>
+ *   <li>"overbooking.percentage" (entero 0-100) y "overbooking.max.percentage" (fracción 0-1) son la MISMA política
+ *   de sobreventa expresada de dos formas: actualizar cualquiera de las dos sincroniza la otra, y la compra y la
+ *   aprobación de overbooking leen la fracción.</li>
+ *   <li>Fee de no-show: "no.show.fee.percentage" (porcentaje del precio del ticket) prevalece sobre el monto fijo
+ *   "no.show.fee" cuando es mayor que 0; con 0 se cobra el monto fijo (ver computeNoShowFee).</li>
+ *   <li>La política de reembolso debe ser monótona no creciente: 48h >= 24h >= 12h >= 6h >= menos de 6h.</li>
+ * </ul>
+ */
 @Service
 @RequiredArgsConstructor
 public class ConfigServiceImpl implements ConfigService {
 
     private static final List<String> SUPPORTED_DISCOUNT_TYPES = List.of("STUDENT", "SENIOR", "CHILD");
+
+    // Tipo de dato de cada clave numérica o booleana (el resto se guarda como STRING)
+    private static final Set<String> INTEGER_KEYS = Set.of(
+            "hold.duration.minutes", "overbooking.percentage", "no.show.fee.percentage",
+            "parcel.otp.max.attempts", "hold.max.per.user.trip", "no.show.window.minutes",
+            "overbooking.window.minutes");
+    private static final Set<String> DECIMAL_KEYS = Set.of(
+            "baggage.weight.limit", "baggage.price.per.kg", "baggage.weight.max", "no.show.fee",
+            "overbooking.max.percentage", "overbooking.min.occupancy",
+            "refund.policy.48hours.percentage", "refund.policy.24hours.percentage",
+            "refund.policy.12hours.percentage", "refund.policy.6hours.percentage",
+            "refund.policy.less.6hours.percentage", "ticket.base.price",
+            "ticket.price.multiplier.peak.hours", "ticket.price.multiplier.high.demand",
+            "ticket.price.multiplier.medium.demand");
+    private static final Set<String> BOOLEAN_KEYS = Set.of("ticket.dynamic.pricing.default");
 
     private final ConfigRepository configRepository;
     private final UserRepository userRepository;
@@ -79,7 +106,14 @@ public class ConfigServiceImpl implements ConfigService {
                 ticketMultiplierPeakHours,
                 ticketMultiplierHighDemand,
                 ticketMultiplierMediumDemand,
-                LocalDateTime.now());
+                LocalDateTime.now(),
+                getBaggageWeightMax(),
+                getParcelOtpMaxAttempts(),
+                getMaxActiveHoldsPerUserAndTrip(),
+                getNoShowWindowMinutes(),
+                getOverbookingMinOccupancy(),
+                getOverbookingWindowMinutes(),
+                isDynamicPricingDefault());
     }
 
     //Actualizar la configuracion
@@ -88,6 +122,9 @@ public class ConfigServiceImpl implements ConfigService {
     public ConfigResponse updateConfig(ConfigUpdateRequest request, Long adminUserId) {
         User admin = userRepository.findById(adminUserId)
                 .orElseThrow(() -> new ResourceNotFoundException("Usuario", adminUserId));
+
+        // Antes de escribir nada: la política de reembolso resultante debe seguir siendo monótona
+        validateRefundPolicy(request);
 
         if (request.holdDurationMinutes() != null) {
             updateConfigValue("hold.duration.minutes", String.valueOf(request.holdDurationMinutes()), admin);
@@ -184,7 +221,59 @@ public class ConfigServiceImpl implements ConfigService {
                     String.valueOf(request.ticketPriceMultiplierMediumDemand()), admin);
         }
 
+        // Límites operativos
+        if (request.baggageWeightMax() != null) {
+            updateConfigValue("baggage.weight.max", String.valueOf(request.baggageWeightMax()), admin);
+        }
+
+        if (request.parcelOtpMaxAttempts() != null) {
+            updateConfigValue("parcel.otp.max.attempts", String.valueOf(request.parcelOtpMaxAttempts()), admin);
+        }
+
+        if (request.maxActiveHoldsPerUserAndTrip() != null) {
+            updateConfigValue("hold.max.per.user.trip", String.valueOf(request.maxActiveHoldsPerUserAndTrip()), admin);
+        }
+
+        if (request.noShowWindowMinutes() != null) {
+            updateConfigValue("no.show.window.minutes", String.valueOf(request.noShowWindowMinutes()), admin);
+        }
+
+        if (request.overbookingMinOccupancy() != null) {
+            updateConfigValue("overbooking.min.occupancy", String.valueOf(request.overbookingMinOccupancy()), admin);
+        }
+
+        if (request.overbookingWindowMinutes() != null) {
+            updateConfigValue("overbooking.window.minutes", String.valueOf(request.overbookingWindowMinutes()), admin);
+        }
+
+        if (request.dynamicPricingDefault() != null) {
+            updateConfigValue("ticket.dynamic.pricing.default", String.valueOf(request.dynamicPricingDefault()), admin);
+        }
+
         return getConfig();
+    }
+
+    // Reembolso monótono no creciente (48h >= 24h >= 12h >= 6h >= <6h) con los valores enviados
+    // y, para los que no vienen, los vigentes
+    private void validateRefundPolicy(ConfigUpdateRequest request) {
+        if (request.refundPercentage48Hours() == null && request.refundPercentage24Hours() == null
+                && request.refundPercentage12Hours() == null && request.refundPercentage6Hours() == null
+                && request.refundPercentageLess6Hours() == null) {
+            return;
+        }
+        List<BigDecimal> policy = List.of(
+                request.refundPercentage48Hours() != null ? request.refundPercentage48Hours() : getRefundPercentage48Hours(),
+                request.refundPercentage24Hours() != null ? request.refundPercentage24Hours() : getRefundPercentage24Hours(),
+                request.refundPercentage12Hours() != null ? request.refundPercentage12Hours() : getRefundPercentage12Hours(),
+                request.refundPercentage6Hours() != null ? request.refundPercentage6Hours() : getRefundPercentage6Hours(),
+                request.refundPercentageLess6Hours() != null ? request.refundPercentageLess6Hours() : getRefundPercentageLess6Hours());
+        for (int i = 1; i < policy.size(); i++) {
+            if (policy.get(i).compareTo(policy.get(i - 1)) > 0) {
+                throw new BusinessException("La política de reembolso debe ser no creciente: 48h >= 24h >= 12h >= 6h >= menos de 6h"
+                        + " (resultado: " + policy.stream().map(BigDecimal::toPlainString).toList() + ")",
+                        HttpStatus.BAD_REQUEST, "REFUND_POLICY_NOT_MONOTONIC");
+            }
+        }
     }
 
     @Override
@@ -366,20 +455,31 @@ public class ConfigServiceImpl implements ConfigService {
 
     private void updateConfigValue(String key, String value, User updatedBy) {
         Config config = configRepository.findByConfigKey(key)
-                .orElseGet(() -> {
+                .orElseGet(() -> Config.builder()
+                        .configKey(key)
+                        .build());
 
-                    return Config.builder()
-                            .configKey(key)
-                            .dataType(Config.DataType.STRING)
-                            .build();
-                });
-
+        // El tipo depende de la clave (INTEGER/DECIMAL/BOOLEAN); también corrige filas antiguas guardadas como STRING
+        config.setDataType(dataTypeOf(key));
         config.setConfigValue(value);
         config.setUpdatedAt(LocalDateTime.now());
         config.setUpdatedBy(updatedBy);
 
         configRepository.save(config);
 
+    }
+
+    static Config.DataType dataTypeOf(String key) {
+        if (INTEGER_KEYS.contains(key) || key.startsWith("discount.percentage.")) {
+            return Config.DataType.INTEGER;
+        }
+        if (DECIMAL_KEYS.contains(key)) {
+            return Config.DataType.DECIMAL;
+        }
+        if (BOOLEAN_KEYS.contains(key)) {
+            return Config.DataType.BOOLEAN;
+        }
+        return Config.DataType.STRING;
     }
 
     @Override

@@ -4,10 +4,13 @@ import com.web.dto.admin.MetricsResponse;
 import com.web.dto.admin.OccupancyMetrics;
 import com.web.dto.admin.OperationalMetrics;
 import com.web.dto.admin.ParcelMetrics;
+import com.web.dto.admin.PunctualityReportResponse;
 import com.web.dto.admin.RevenueMetrics;
+import com.web.dto.admin.RoutePunctuality;
 import com.web.entity.Baggage;
 import com.web.entity.Bus;
 import com.web.entity.Parcel;
+import com.web.entity.PunctualityReport;
 import com.web.entity.Route;
 import com.web.entity.Stop;
 import com.web.entity.Ticket;
@@ -15,10 +18,12 @@ import com.web.entity.Trip;
 import com.web.exception.BusinessException;
 import com.web.repository.IncidentRepository;
 import com.web.repository.ParcelRepository;
+import com.web.repository.PunctualityReportRepository;
 import com.web.repository.TicketRepository;
 import com.web.repository.TripRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -29,6 +34,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -52,6 +58,8 @@ class MetricsServiceImplTest {
     private ParcelRepository parcelRepository;
     @Mock
     private IncidentRepository incidentRepository;
+    @Mock
+    private PunctualityReportRepository punctualityReportRepository;
 
     @InjectMocks
     private MetricsServiceImpl metricsService;
@@ -480,6 +488,162 @@ class MetricsServiceImplTest {
         assertThat(MetricsServiceImpl.percentile(sorted, 95)).isEqualTo(40.0);  // ceil(3.8) = 4
         assertThat(MetricsServiceImpl.percentile(sorted, 100)).isEqualTo(40.0);
         assertThat(MetricsServiceImpl.percentile(sorted, 0)).isEqualTo(10.0);   // rango 0 -> primer elemento
+    }
+
+    // ---------- Retrasos y puntualidad por ruta ----------
+
+    private static Trip routeTrip(long id, Route route, int departureDelayMin, Integer arrivalDelayMin) {
+        Trip trip = trip(id, 40, Trip.TripStatus.ARRIVED);
+        trip.setRoute(route);
+        trip.setDepartedAt(DEPARTURE.plusMinutes(departureDelayMin));
+        if (arrivalDelayMin != null) {
+            trip.setArrivedAt(ETA.plusMinutes(arrivalDelayMin));
+        }
+        return trip;
+    }
+
+    @Test
+    void shouldGetMetrics_WithDepartedTrips_CalculateAverageAndP95DelaysAndPunctualityByRoute() {
+        // Given: ruta B (2 viajes) y ruta A (1 viaje); una salida adelantada cuenta como 0 min de retraso
+        Route routeA = Route.builder().id(1L).code("A-01").build();
+        Route routeB = Route.builder().id(2L).code("B-02").build();
+        Trip b1 = routeTrip(1L, routeB, 0, 4);
+        Trip b2 = routeTrip(2L, routeB, 20, null);           // aún no llega
+        Trip a1 = routeTrip(3L, routeA, -3, 12);              // salió 3 min antes
+        Trip notDeparted = trip(4L, 40, Trip.TripStatus.SCHEDULED);
+        notDeparted.setRoute(routeA);
+        givenData(List.of(b1, b2, a1, notDeparted), List.of(), List.of(), 0L);
+
+        // When
+        OperationalMetrics operational = metricsService.getMetrics(START, END).operational();
+
+        // Then: retrasos de salida [0, 0, 20] y de llegada [4, 12]
+        assertThat(operational.avgDepartureDelayMin()).isCloseTo(6.67, within(1e-9));
+        assertThat(operational.p95DepartureDelayMin()).isEqualTo(20.0);
+        assertThat(operational.avgArrivalDelayMin()).isEqualTo(8.0);
+        assertThat(operational.p95ArrivalDelayMin()).isEqualTo(12.0);
+
+        // Desglose ordenado por código de ruta y solo con viajes que salieron
+        assertThat(operational.punctualityByRoute()).hasSize(2);
+        RoutePunctuality a = operational.punctualityByRoute().get(0);
+        assertThat(a.routeId()).isEqualTo(1L);
+        assertThat(a.routeCode()).isEqualTo("A-01");
+        assertThat(a.trips()).isEqualTo(1);
+        assertThat(a.onTimeDeparturePct()).isEqualTo(100.0);
+        assertThat(a.onTimeArrivalPct()).isZero();             // 12 min > tolerancia de 10
+        assertThat(a.avgDepartureDelayMin()).isZero();
+        RoutePunctuality b = operational.punctualityByRoute().get(1);
+        assertThat(b.routeCode()).isEqualTo("B-02");
+        assertThat(b.trips()).isEqualTo(2);
+        assertThat(b.onTimeDeparturePct()).isEqualTo(50.0);
+        assertThat(b.onTimeArrivalPct()).isEqualTo(100.0);
+        assertThat(b.avgDepartureDelayMin()).isEqualTo(10.0);
+    }
+
+    @Test
+    void shouldGetMetrics_WithoutDepartedTrips_ReturnNullDelaysAndEmptyBreakdown() {
+        // Given
+        givenData(List.of(trip(1L, 40, Trip.TripStatus.SCHEDULED)), List.of(), List.of(), 0L);
+
+        // When
+        OperationalMetrics operational = metricsService.getMetrics(START, END).operational();
+
+        // Then
+        assertThat(operational.avgDepartureDelayMin()).isNull();
+        assertThat(operational.p95DepartureDelayMin()).isNull();
+        assertThat(operational.avgArrivalDelayMin()).isNull();
+        assertThat(operational.p95ArrivalDelayMin()).isNull();
+        assertThat(operational.punctualityByRoute()).isEmpty();
+    }
+
+    @Test
+    void shouldCalculateDelayMinutes_WithSecondsAndEarlyDepartures() {
+        // When/Then
+        assertThat(MetricsServiceImpl.delayMinutes(DEPARTURE, DEPARTURE.plusSeconds(90))).isEqualTo(1.5);
+        assertThat(MetricsServiceImpl.delayMinutes(DEPARTURE, DEPARTURE.minusMinutes(5))).isZero();
+        assertThat(MetricsServiceImpl.delayMinutes(DEPARTURE, DEPARTURE.plusSeconds(20))).isEqualTo(0.33);
+    }
+
+    // ---------- Reporte diario de puntualidad ----------
+
+    @Test
+    void shouldGeneratePunctualityReport_CreateOneRowPerRouteAndUpdateExistingOnes() {
+        // Given: la ruta A ya tenía reporte ese día (se regenera), la B no
+        LocalDate day = LocalDate.of(2026, 1, 10);
+        Route routeA = Route.builder().id(1L).code("A-01").build();
+        Route routeB = Route.builder().id(2L).code("B-02").build();
+        Trip a1 = routeTrip(1L, routeA, 2, 5);
+        Trip a2 = routeTrip(2L, routeA, 10, 20);
+        Trip b1 = routeTrip(3L, routeB, 0, null);
+        PunctualityReport existingA = PunctualityReport.builder().id(7L).reportDate(day).route(routeA).trips(1)
+                .createdAt(LocalDateTime.of(2026, 1, 11, 0, 5)).build();
+        when(tripRepository.findByDateRange(day, day)).thenReturn(List.of(b1, a1, a2));
+        when(punctualityReportRepository.findByReportDateAndRouteId(day, 1L)).thenReturn(Optional.of(existingA));
+        when(punctualityReportRepository.findByReportDateAndRouteId(day, 2L)).thenReturn(Optional.empty());
+        when(punctualityReportRepository.save(any(PunctualityReport.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        // When
+        List<PunctualityReportResponse> reports = metricsService.generatePunctualityReport(day);
+
+        // Then
+        ArgumentCaptor<PunctualityReport> captor = ArgumentCaptor.forClass(PunctualityReport.class);
+        verify(punctualityReportRepository, times(2)).save(captor.capture());
+        assertThat(captor.getAllValues()).contains(existingA);
+        assertThat(existingA.getTrips()).isEqualTo(2);
+        assertThat(existingA.getOnTimeDeparturePct()).isEqualTo(50.0);
+        assertThat(existingA.getOnTimeArrivalPct()).isEqualTo(50.0);
+        assertThat(existingA.getAvgDepartureDelayMin()).isEqualTo(6.0);
+        assertThat(existingA.getAvgArrivalDelayMin()).isEqualTo(12.5);
+
+        PunctualityReport newB = captor.getAllValues().stream().filter(r -> r != existingA).findFirst().orElseThrow();
+        assertThat(newB.getId()).isNull();
+        assertThat(newB.getReportDate()).isEqualTo(day);
+        assertThat(newB.getRoute()).isSameAs(routeB);
+        assertThat(newB.getTrips()).isEqualTo(1);
+        assertThat(newB.getOnTimeArrivalPct()).isNull();
+        assertThat(newB.getAvgArrivalDelayMin()).isNull();
+
+        assertThat(reports).extracting(PunctualityReportResponse::routeCode).containsExactly("A-01", "B-02");
+    }
+
+    @Test
+    void shouldGeneratePunctualityReport_WithoutDepartedTrips_SaveNothing() {
+        // Given
+        LocalDate day = LocalDate.of(2026, 1, 10);
+        when(tripRepository.findByDateRange(day, day)).thenReturn(List.of(trip(1L, 40, Trip.TripStatus.CANCELLED)));
+
+        // When
+        List<PunctualityReportResponse> reports = metricsService.generatePunctualityReport(day);
+
+        // Then
+        assertThat(reports).isEmpty();
+        verifyNoInteractions(punctualityReportRepository);
+    }
+
+    @Test
+    void shouldGetPunctualityReports_MapStoredRows() {
+        // Given
+        Route route = Route.builder().id(3L).code("BOG-TUN").build();
+        PunctualityReport stored = PunctualityReport.builder().reportDate(START).route(route).trips(4)
+                .onTimeDeparturePct(75.0).onTimeArrivalPct(50.0).avgDepartureDelayMin(6.25).avgArrivalDelayMin(12.0)
+                .createdAt(START.plusDays(1).atTime(0, 5)).build();
+        when(punctualityReportRepository.findByReportDateBetween(START, END)).thenReturn(List.of(stored));
+
+        // When
+        List<PunctualityReportResponse> result = metricsService.getPunctualityReports(START, END);
+
+        // Then
+        assertThat(result).containsExactly(new PunctualityReportResponse(START, 3L, "BOG-TUN", 4, 75.0, 50.0,
+                6.25, 12.0, START.plusDays(1).atTime(0, 5)));
+    }
+
+    @Test
+    void shouldGetPunctualityReports_WithEndBeforeStart_ThrowInvalidDateRange() {
+        // When/Then
+        assertThatThrownBy(() -> metricsService.getPunctualityReports(END, START))
+                .isInstanceOf(BusinessException.class)
+                .extracting("code").isEqualTo("INVALID_DATE_RANGE");
+        verifyNoInteractions(punctualityReportRepository);
     }
 
     @Test

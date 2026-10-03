@@ -4,10 +4,13 @@ import com.web.entity.User;
 import com.web.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.stereotype.Service;
+
+import java.util.List;
 
 
 @Service
@@ -21,14 +24,11 @@ public class CustomUserDetailsService implements UserDetailsService {
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new UsernameNotFoundException("Usuario no encontrado: " + email));
 
-        return org.springframework.security.core.userdetails.User
-                .withUsername(user.getEmail())
-                .password(user.getPasswordHash())
-                .authorities("ROLE_" + user.getRole().name())
-                .accountExpired(false)
-                .accountLocked(false)
-                .credentialsExpired(false)
-                .disabled(user.getStatus() != User.Status.ACTIVE)
-                .build();
+        return new SecurityUser(
+                user.getEmail(),
+                user.getPasswordHash(),
+                user.getStatus() == User.Status.ACTIVE,
+                List.of(new SimpleGrantedAuthority("ROLE_" + user.getRole().name())),
+                user.getPasswordChangedAt());
     }
 }

@@ -174,20 +174,30 @@ class BugFixRegressionIntegrationTest extends BaseIntegrationTest {
                 .containsExactly(SeatHold.HoldStatus.SOLD);
     }
 
-    // Verifica que el registro público no permita crear administradores
+    // Verifica que el registro público no permita crear administradores: 403 explícito, no una degradación silenciosa
     @Test
-    void publicRegister_withAdminRole_shouldCreatePassenger() throws Exception {
+    void publicRegister_withAdminRole_shouldReturn403AndNotCreateUser() throws Exception {
         RegisterRequest request = new RegisterRequest("Intruso", "intruso@test.com", "300", "secreto1", User.Role.ADMIN);
+
+        mvc.perform(post("/api/v1/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(om.writeValueAsString(request)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.status").value(403));
+
+        assertThat(userRepository.findByEmail("intruso@test.com")).isEmpty();
+    }
+
+    // Verifica que el registro público pidiendo explícitamente PASSENGER sí funcione
+    @Test
+    void publicRegister_withPassengerRole_shouldCreatePassenger() throws Exception {
+        RegisterRequest request = new RegisterRequest("Pasajero", "pasajero@test.com", "300", "secreto1", User.Role.PASSENGER);
 
         mvc.perform(post("/api/v1/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(om.writeValueAsString(request)))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.role").value("PASSENGER"));
-
-        String token = login("intruso@test.com", "secreto1");
-        mvc.perform(get("/api/v1/admin/config").header("Authorization", "Bearer " + token))
-                .andExpect(status().isForbidden());
     }
 
     // Verifica que un ADMIN autenticado sí pueda registrar usuarios con otros roles

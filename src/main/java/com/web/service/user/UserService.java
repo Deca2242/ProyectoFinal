@@ -24,6 +24,9 @@ public interface UserService {
     // Gestión de usuarios (ADMIN): filtros opcionales por rol y estado
     List<UserResponse> getUsers(User.Role role, User.Status status);
 
+    // Igual que el anterior con búsqueda de texto opcional por nombre, email o teléfono
+    List<UserResponse> getUsers(User.Role role, User.Status status, String q);
+
     UserResponse updateStatus(Long id, User.Status status);
 
     UserResponse updateRole(Long id, User.Role role);

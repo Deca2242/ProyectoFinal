@@ -352,16 +352,16 @@ class ProjectRequirementsIntegrationTest extends BaseIntegrationTest {
         String adminToken = staff("admin@test.com", User.Role.ADMIN);
 
         updateConfig(adminToken, new ConfigUpdateRequest(null, null, null, Map.of("STUDENT", 150), null, null,
-                null, null, null, null, null, null, null, null, null, null, null))
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null))
                 .andExpect(status().isBadRequest());
         updateConfig(adminToken, new ConfigUpdateRequest(null, null, null, Map.of("VIP", 10), null, null,
-                null, null, null, null, null, null, null, null, null, null, null))
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null))
                 .andExpect(status().isBadRequest());
         updateConfig(adminToken, new ConfigUpdateRequest(0, null, null, null, null, null,
-                null, null, null, null, null, null, null, null, null, null, null))
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null))
                 .andExpect(status().isBadRequest());
         updateConfig(adminToken, new ConfigUpdateRequest(null, null, null, null, null, null,
-                null, -0.5, null, null, null, null, null, null, null, null, null))
+                null, -0.5, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null))
                 .andExpect(status().isBadRequest());
     }
 
